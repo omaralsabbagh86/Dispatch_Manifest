@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V2</title>
+<title>Dispatch Manifest V3</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -405,13 +405,31 @@ select:disabled,option:disabled{color:#5B646C;}
 .seq-note{font-family:var(--mono);font-size:10px;color:var(--text-low);margin-top:3px;}
 .record-detail dl{margin:0;}
 
+/* ---------- Fully-collapsing panels (Delivery Manifest 2-5) ---------- */
+.panel.allhidden:not(.open) .panel-body{display:none;}
+.panel.allhidden .panel-more{border-top:none;margin-top:0;padding-top:0;}
+
+/* ---------- Scanner zoom ---------- */
+.zoom-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.zoom-row .zl{font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--text-mid);flex:0 0 auto;}
+.zoom-row input[type=range]{flex:1;accent-color:var(--amber);background:transparent;}
+
+/* ---------- Editing an existing trip ---------- */
+.editing-banner{
+  font-family:var(--mono);font-size:11px;color:var(--amber);
+  background:rgba(242,169,59,.10);border:1px solid var(--amber-dim);
+  border-radius:8px;padding:9px 12px;margin-bottom:12px;line-height:1.5;
+}
+.editing-banner.hidden{display:none !important;}
+
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V2</h1>
+  <h1>Dispatch Manifest V3</h1>
 </div>
 
 <div class="screens">
@@ -420,6 +438,7 @@ select:disabled,option:disabled{color:#5B646C;}
   <section class="screen active" data-screen="trip">
 
     <div class="section-label">Trip Details</div>
+    <div class="editing-banner hidden" id="editBanner"></div>
 
     <div class="form-grid">
       <div class="field">
@@ -429,7 +448,7 @@ select:disabled,option:disabled{color:#5B646C;}
       </div>
       <div class="field">
         <label for="tripCounter">Trips Counter</label>
-        <div class="readonly-val" id="tripCounter">1</div>
+        <select id="tripCounter"></select>
         <div class="seq-note" id="tripCounterNote">First trip of this day</div>
       </div>
     </div>
@@ -551,6 +570,12 @@ select:disabled,option:disabled{color:#5B646C;}
       </div>
     </div>
 
+    <div class="field full" style="margin-bottom:12px;">
+      <label>DC Employee Signature</label>
+      <div class="sig-preview blank" id="empSigPreview">Tap to sign</div>
+      <div class="seq-note" id="empSigNote">Opens a full-screen signing sheet.</div>
+    </div>
+
     <div class="form-grid">
       <div class="field full">
         <label for="dispatchAt">Delivery Dispatch Date &amp; Time</label>
@@ -564,6 +589,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
     <div class="form-actions">
       <button class="btn primary" id="saveTripBtn">Save trip</button>
+      <button class="btn danger" id="deleteTripBtn" style="display:none;">Delete</button>
       <button class="btn ghost" id="resetTripBtn">Reset</button>
     </div>
     <div style="height:14px;"></div>
@@ -719,6 +745,10 @@ select:disabled,option:disabled{color:#5B646C;}
   </div>
   <div class="sc-foot">
     <div class="sc-msg" id="scanMsg">Starting camera…</div>
+    <div class="zoom-row hidden" id="scanZoomRow">
+      <span class="zl">Zoom</span>
+      <input type="range" id="scanZoom" min="1" max="4" step="0.1" value="1">
+    </div>
     <div class="btn-row"><button class="btn small" id="scanTorchBtn">Torch</button></div>
   </div>
 </div>
@@ -726,7 +756,7 @@ select:disabled,option:disabled{color:#5B646C;}
 <!-- Signature overlay -->
 <div class="sig-overlay" id="sigOverlay">
   <div class="sig-bar">
-    <span class="t">Driver signature</span>
+    <span class="t" id="sigTitle">Driver signature</span>
     <button class="btn small ghost" id="sigCancelBtn">Cancel</button>
   </div>
   <div class="sig-stage"><canvas id="sigCanvas"></canvas></div>
@@ -1112,34 +1142,81 @@ function openScanner(opts){
   $('scanTitle').textContent = opts.title || 'Scan';
   $('scanOverlay').classList.add('show');
   setScanMsg('Starting camera…');
+  $('scanZoomRow').classList.add('hidden');
   scanOnHit = opts.onHit;
   scanActive = true;
 
   var hints = new Map();
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formatsFor(opts.mode));
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  scanReader = new ZXing.BrowserMultiFormatReader(hints, 300);
+  scanReader = new ZXing.BrowserMultiFormatReader(hints, 200);
 
-  var constraints = { video: { facingMode: { ideal: 'environment' } }, audio: false };
+  /* Resolution matters more than anything else for Code 128: the default
+     640x480 stream renders the bars too thin to resolve. Ask for the
+     highest sensible frame and let the browser fall back if it can't. */
+  var constraints = {
+    audio: false,
+    video: {
+      facingMode: { ideal: 'environment' },
+      width:  { ideal: 1920, min: 1280 },
+      height: { ideal: 1080, min: 720 },
+      frameRate: { ideal: 30 },
+      advanced: [{ focusMode: 'continuous' }]
+    }
+  };
 
-  scanReader.decodeFromConstraints(constraints, $('scanVideo'), function(result, err){
-    if(!scanActive) return;
-    if(result){
+  function start(c, isFallback){
+    return scanReader.decodeFromConstraints(c, $('scanVideo'), function(result){
+      if(!scanActive || !result) return;
       var text = result.getText();
       flash();
       var done = false;
       try { done = scanOnHit ? scanOnHit(text, result) : true; } catch(e){ console.warn(e); }
       if(done) closeScanner();
-    }
-  }).then(function(){
-    var v = $('scanVideo');
-    scanStream = v.srcObject || null;
-    if(scanActive) setScanMsg(opts.hint || 'Point the camera at the code', 'live');
+    }).then(function(){
+      var v = $('scanVideo');
+      scanStream = v.srcObject || null;
+      if(!scanActive) return;
+      var res = '';
+      if(scanStream){
+        var tr = scanStream.getVideoTracks()[0];
+        if(tr && tr.getSettings){
+          var s = tr.getSettings();
+          if(s.width && s.height) res = '  ·  ' + s.width + '\u00D7' + s.height;
+        }
+        setupZoom(tr);
+      }
+      setScanMsg((opts.hint || 'Point the camera at the code') + res, 'live');
+    });
+  }
+
+  start(constraints).catch(function(){
+    /* Some cameras reject the min constraints outright — retry loosely. */
+    return start({ audio: false, video: { facingMode: { ideal: 'environment' },
+                                          width: { ideal: 1920 }, height: { ideal: 1080 } } }, true);
   }).catch(function(e){
     setScanMsg('Camera unavailable — ' + (e && e.message ? e.message : 'permission denied'), 'err');
   });
 }
 APP.openScanner = openScanner;
+
+/* Optical zoom helps a lot when the label is across a pallet. */
+function setupZoom(track){
+  var row = $('scanZoomRow'), slider = $('scanZoom');
+  if(!track || !track.getCapabilities) return;
+  var caps;
+  try { caps = track.getCapabilities(); } catch(e){ return; }
+  if(!caps || !caps.zoom) return;
+  slider.min = caps.zoom.min;
+  slider.max = caps.zoom.max;
+  slider.step = caps.zoom.step || 0.1;
+  var settings = track.getSettings ? track.getSettings() : {};
+  slider.value = settings.zoom || caps.zoom.min;
+  slider.oninput = function(){
+    track.applyConstraints({ advanced: [{ zoom: Number(slider.value) }] }).catch(function(){});
+  };
+  row.classList.remove('hidden');
+}
 
 function closeScanner(){
   scanActive = false;
@@ -1241,21 +1318,39 @@ APP.pickFile = pickFile;
 var APP = window.APP;
 var $ = APP.$, el = APP.el, toast = APP.toast, DB = APP.DB;
 
-/* Schema for each list. `key` is the unique identity field. */
+/* Schema for each list.
+   `key` is the unique identity field; `keyOf` allows a fallback when the
+   primary identity column is blank in an imported sheet.
+   `a` lists alternative column headings accepted on import — matched after
+   lowercasing and stripping punctuation, so "Vehicle No." finds vehicleNo. */
 var SCHEMAS = {
   vehicles: {
     store: 'vehicles',
     label: 'Vehicle',
-    key: 'number',
+    key: 'truckId',
     qrKind: 'VEH',
     fields: [
-      { k: 'number',   l: 'Vehicle number', req: true },
-      { k: 'type',     l: 'Vehicle type' },
-      { k: 'capacity', l: 'Capacity' },
-      { k: 'owner',    l: 'Owner / fleet' },
-      { k: 'notes',    l: 'Notes' }
+      { k: 'truckId',      l: 'Truck ID', req: true, a: ['truck id', 'truckno', 'truck'] },
+      { k: 'vehicleType',  l: 'Vehicle Type', a: ['type'] },
+      { k: 'vehicleNo',    l: 'Vehicle No.', req: true,
+        a: ['vehicle no', 'vehicle number', 'number', 'vehicleno', 'plate'] },
+      { k: 'chassis',      l: 'Chassis Number', a: ['chassis number', 'chassisno', 'vin'] },
+      { k: 'maker',        l: 'Maker', a: ['make', 'manufacturer'] },
+      { k: 'model',        l: 'Model' },
+      { k: 'remark',       l: 'Remark', a: ['remarks'] },
+      { k: 'palletsCount', l: 'Considered Pallets Count',
+        a: ['considered pallets count', 'pallets count', 'pallet count', 'pallets'] },
+      { k: 'tonnage',      l: 'Considered Tonnage',
+        a: ['considered tonnage', 'tonnage', 'capacity'] },
+      { k: 'notes',        l: 'Notes', a: ['note'] }
     ],
-    chip: function(r){ return r.number; }
+    keyOf: function(r){ return r.truckId || r.vehicleNo; },
+    /* what the trip's "Vehicle Number" dropdown shows and stores */
+    display: function(r){ return r.vehicleNo || r.truckId; },
+    chip: function(r){
+      var n = r.vehicleNo || '(no vehicle no.)';
+      return r.truckId && r.truckId !== r.vehicleNo ? n + ' · ' + r.truckId : n;
+    }
   },
   drivers: {
     store: 'drivers',
@@ -1263,13 +1358,17 @@ var SCHEMAS = {
     key: 'empId',
     qrKind: 'DRV',
     fields: [
-      { k: 'empId',   l: 'Driver employee ID', req: true },
-      { k: 'name',    l: 'Driver name', req: true },
-      { k: 'phone',   l: 'Phone' },
-      { k: 'licence', l: 'Licence number' },
-      { k: 'notes',   l: 'Notes' }
+      { k: 'driverId', l: 'Driver ID', a: ['driver id', 'driverno'] },
+      { k: 'empId',    l: 'Employee ID', req: true,
+        a: ['emp id', 'employee id', 'employeeid', 'empno', 'employee no'] },
+      { k: 'name',     l: 'Name', req: true, a: ['driver name', 'drivername', 'full name'] },
+      { k: 'phone',    l: 'Phone', a: ['mobile', 'contact'] },
+      { k: 'licence',  l: 'Licence', a: ['license', 'licence no', 'license no'] },
+      { k: 'notes',    l: 'Notes', a: ['note'] }
     ],
-    chip: function(r){ return r.name + ' · ' + r.empId; }
+    keyOf: function(r){ return r.empId || r.driverId; },
+    display: function(r){ return r.name; },
+    chip: function(r){ return r.name + ' · ' + (r.empId || r.driverId); }
   },
   dc: {
     store: 'dc',
@@ -1277,14 +1376,50 @@ var SCHEMAS = {
     key: 'empId',
     qrKind: 'DCE',
     fields: [
-      { k: 'empId', l: 'DC employee ID', req: true },
-      { k: 'name',  l: 'DC employee name', req: true },
-      { k: 'dept',  l: 'Department' },
-      { k: 'notes', l: 'Notes' }
+      { k: 'empId', l: 'DC Employee ID', req: true,
+        a: ['emp id', 'employee id', 'employeeid', 'dc employee id', 'dc id'] },
+      { k: 'name',  l: 'DC Employee Name', req: true,
+        a: ['name', 'dc employee name', 'employee name'] },
+      { k: 'dept',  l: 'Department', a: ['department'] },
+      { k: 'notes', l: 'Notes', a: ['note'] }
     ],
+    keyOf: function(r){ return r.empId; },
+    display: function(r){ return r.name; },
     chip: function(r){ return r.name + ' · ' + r.empId; }
   }
 };
+
+/* Normalise a column heading for matching: "Considered Pallets Count" -> "consideredpalletscount" */
+function normKey(s){
+  return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/* Map an incoming record's arbitrary column headings onto canonical field keys.
+   Unrecognised columns are preserved so nothing from the sheet is silently lost. */
+function normaliseRecord(which, raw){
+  var sc = SCHEMAS[which];
+  var lookup = {};
+  sc.fields.forEach(function(f){
+    lookup[normKey(f.k)] = f.k;
+    lookup[normKey(f.l)] = f.k;
+    (f.a || []).forEach(function(alias){ lookup[normKey(alias)] = f.k; });
+  });
+
+  var out = {};
+  Object.keys(raw || {}).forEach(function(col){
+    var canon = lookup[normKey(col)];
+    var val = raw[col];
+    if(val == null) val = '';
+    val = String(val).trim();
+    if(canon){
+      /* Don't let a blank duplicate column wipe a value already mapped. */
+      if(out[canon] == null || out[canon] === '') out[canon] = val;
+    } else if(String(col).trim()){
+      out[String(col).trim()] = val;
+    }
+  });
+  return out;
+}
 
 var cache = { vehicles: [], drivers: [], dc: [] };
 var subscribers = [];
@@ -1304,13 +1439,22 @@ var Lists = APP.Lists = {
   }
 };
 
+Lists.normaliseRecord = normaliseRecord;
+
+function keyOfRec(which, r){
+  var sc = SCHEMAS[which];
+  var k = sc.keyOf ? sc.keyOf(r) : r[sc.key];
+  return (k == null) ? '' : String(k).trim();
+}
+Lists.keyOf = keyOfRec;
+
 function notify(){
   subscribers.forEach(function(fn){ try { fn(); } catch(e){ console.warn(e); } });
 }
 
 function sortItems(which, items){
   var sc = SCHEMAS[which];
-  var sortKey = which === 'vehicles' ? 'number' : 'name';
+  var sortKey = which === 'vehicles' ? 'vehicleNo' : 'name';
   return items.slice().sort(function(a, b){
     return String(a[sortKey] || '').localeCompare(String(b[sortKey] || ''), undefined,
       { numeric: true, sensitivity: 'base' });
@@ -1363,13 +1507,15 @@ Lists.addRecord = addRecord;
 function mergeInto(which, incoming, mode){
   var sc = SCHEMAS[which];
   var byKey = {};
-  cache[which].forEach(function(r){ byKey[String(r[sc.key])] = r; });
+  cache[which].forEach(function(r){ byKey[String(keyOfRec(which, r))] = r; });
 
   var added = 0, updated = 0, skipped = 0;
-  incoming.forEach(function(r){
-    var k = String(r[sc.key] == null ? '' : r[sc.key]).trim();
+  incoming.forEach(function(raw){
+    var r = normaliseRecord(which, raw);
+    var k = String(keyOfRec(which, r) || '').trim();
     if(!k){ skipped++; return; }
-    r[sc.key] = k;
+    /* Backfill the identity column so the record stays addressable. */
+    if(!r[sc.key]) r[sc.key] = k;
     if(byKey[k]){
       if(mode === 'replace'){ byKey[k] = Object.assign({}, byKey[k], r); updated++; }
       else skipped++;
@@ -1387,13 +1533,13 @@ Lists.mergeInto = mergeInto;
 
 function removeRecord(which, keyVal){
   var sc = SCHEMAS[which];
-  var rec = cache[which].filter(function(r){ return String(r[sc.key]) === String(keyVal); })[0];
+  var rec = cache[which].filter(function(r){ return keyOfRec(which, r) === String(keyVal); })[0];
   var name = rec ? sc.chip(rec) : keyVal;
   return APP.confirmModal('Remove ' + sc.label.toLowerCase(),
     'Remove "' + name + '" from the stored list? Trips already saved keep their own copy.',
     'Remove').then(function(ok){
     if(!ok) return false;
-    var out = cache[which].filter(function(r){ return String(r[sc.key]) !== String(keyVal); });
+    var out = cache[which].filter(function(r){ return keyOfRec(which, r) !== String(keyVal); });
     return Lists.save(which, out).then(function(){
       toast(sc.label + ' removed');
       return true;
@@ -1413,13 +1559,13 @@ function renderChips(which, host, selectedKey){
     return;
   }
   items.forEach(function(r){
-    var chip = el('span', 'chip' + (String(r[sc.key]) === String(selectedKey) ? ' sel' : ''));
+    var chip = el('span', 'chip' + (keyOfRec(which, r) === String(selectedKey) ? ' sel' : ''));
     chip.appendChild(document.createTextNode(sc.chip(r)));
     var x = el('span', 'x', '\u00D7');
     x.title = 'Remove';
     x.addEventListener('click', function(ev){
       ev.stopPropagation();
-      removeRecord(which, r[sc.key]);
+      removeRecord(which, keyOfRec(which, r));
     });
     chip.appendChild(x);
     host.appendChild(chip);
@@ -1436,7 +1582,7 @@ function renderDetails(which, host, keyVal){
       + ' to see its stored details.'));
     return;
   }
-  var rec = cache[which].filter(function(r){ return String(r[sc.key]) === String(keyVal); })[0];
+  var rec = cache[which].filter(function(r){ return keyOfRec(which, r) === String(keyVal); })[0];
   if(!rec){
     host.appendChild(el('div', 'detail-empty', 'No stored details for this entry.'));
     return;
@@ -1651,7 +1797,7 @@ function exportCsv(which){
   var items = cache[which];
   if(!items.length){ toast('Nothing to export', true); return; }
   var cols = sc.fields.map(function(f){ return f.k; });
-  var rows = [cols];
+  var rows = [sc.fields.map(function(f){ return f.l; })];
   items.forEach(function(r){
     rows.push(cols.map(function(c){ return r[c] == null ? '' : r[c]; }));
   });
@@ -1668,18 +1814,17 @@ function importCsv(which){
       var rows = APP.parseCsv(text);
       if(rows.length < 2){ toast('That file has no data rows', true); return; }
       var header = rows[0].map(function(h){ return String(h).trim(); });
-      var keyIdx = header.findIndex(function(h){
-        return h.toLowerCase() === sc.key.toLowerCase();
-      });
-      if(keyIdx < 0){
-        toast('CSV needs a "' + sc.key + '" column', true);
-        return;
-      }
       var records = rows.slice(1).map(function(r){
         var o = {};
         header.forEach(function(h, i){ if(h) o[h] = (r[i] == null ? '' : String(r[i]).trim()); });
         return o;
       });
+      var usable = records.filter(function(o){
+        return keyOfRec(which, normaliseRecord(which, o)); });
+      if(!usable.length){
+        toast('No usable rows — CSV needs a ' + sc.fields[0].l + ' column', true);
+        return;
+      }
       return mergeInto(which, records, 'replace').then(function(res){
         toast(res.added + ' added, ' + res.updated + ' updated');
       });
@@ -1713,6 +1858,9 @@ var Lists = APP.Lists;
 var Trip = APP.Trip = {};
 var tripsCache = [];
 var signatureData = null;
+var empSignatureData = null;
+var editingId = null;
+var currentCounter = 1;
 
 /* ---------------- scan icon ---------------- */
 function scanIcon(){
@@ -1797,20 +1945,24 @@ function buildManifests(){
     panel.appendChild(head);
 
     var body = el('div', 'panel-body');
-
-    /* Always visible */
-    body.appendChild(makeScanField('m' + g + '_truck', 'Truck Manifest ' + g));
-    body.appendChild(makeScanField('m' + g + '_master', 'Master Pallet Manifest'));
-    for(var v = 1; v <= C.MERGED_ALWAYS_VISIBLE; v++){
-      body.appendChild(makeScanField('m' + g + '_mp' + v, 'Merged Pallet Manifest ' + v));
-    }
-
-    /* Revealed when the panel is expanded */
     var more = el('div', 'panel-more');
+
+    /* Group 1 keeps its four lead fields on screen at all times.
+       Groups 2-5 collapse completely — nothing shows until expanded. */
+    var alwaysOn = (g === 1);
+    if(!alwaysOn) panel.classList.add('allhidden');
+    var lead = alwaysOn ? body : more;
+
+    lead.appendChild(makeScanField('m' + g + '_truck', 'Truck Manifest ' + g));
+    lead.appendChild(makeScanField('m' + g + '_master', 'Master Pallet Manifest'));
+    for(var v = 1; v <= C.MERGED_ALWAYS_VISIBLE; v++){
+      lead.appendChild(makeScanField('m' + g + '_mp' + v, 'Merged Pallet Manifest ' + v));
+    }
     for(var m = C.MERGED_ALWAYS_VISIBLE + 1; m <= C.MERGED_PER_GROUP; m++){
       more.appendChild(makeScanField('m' + g + '_mp' + m, 'Merged Pallet Manifest ' + m));
     }
-    body.appendChild(more);
+    if(alwaysOn) body.appendChild(more);
+    else body.appendChild(more);
 
     panel.appendChild(body);
     host.appendChild(panel);
@@ -1854,17 +2006,123 @@ function refreshDateStamp(){
   $('dateStampOut').textContent = APP.formatStamp(iso);
 }
 
-function refreshTripCounter(){
+/* Trips for the selected date, in counter order. */
+function tripsForDate(){
   var iso = $('dateStamp').value;
-  var n = tripsCache.filter(function(t){ return t.dateStamp === iso; }).length;
-  $('tripCounter').textContent = String(n + 1);
-  $('tripCounterNote').textContent = n === 0
+  return tripsCache.filter(function(t){ return t.dateStamp === iso; })
+    .sort(function(a, b){ return Number(a.tripCounter) - Number(b.tripCounter); });
+}
+
+/* The counter lists every saved trip of the day plus the next new one,
+   so it doubles as a way to reopen a record. */
+function refreshTripCounter(keepSelection){
+  var sel = $('tripCounter');
+  var saved = tripsForDate();
+  var nextNew = saved.length ? Number(saved[saved.length - 1].tripCounter) + 1 : 1;
+  var want = keepSelection ? sel.value : (editingId ? String(currentCounter) : String(nextNew));
+
+  sel.innerHTML = '';
+  saved.forEach(function(t){
+    var o = document.createElement('option');
+    o.value = String(t.tripCounter);
+    o.textContent = t.tripCounter + ' — saved';
+    sel.appendChild(o);
+  });
+  var o2 = document.createElement('option');
+  o2.value = String(nextNew);
+  o2.textContent = nextNew + ' — new';
+  sel.appendChild(o2);
+
+  if(want && sel.querySelector('option[value="' + want + '"]')) sel.value = want;
+  else sel.value = String(nextNew);
+  currentCounter = Number(sel.value);
+
+  $('tripCounterNote').textContent = saved.length === 0
     ? 'First trip of this day'
-    : n + ' trip' + (n === 1 ? '' : 's') + ' already saved for this day';
+    : saved.length + ' trip' + (saved.length === 1 ? '' : 's')
+      + ' saved — pick a number to reopen it';
+}
+
+/* Selecting a saved number loads that trip; the "new" number clears the form. */
+function onTripCounterChange(){
+  var want = Number($('tripCounter').value);
+  var rec = tripsForDate().filter(function(t){ return Number(t.tripCounter) === want; })[0];
+  if(rec) loadTrip(rec);
+  else startNewTrip(want);
+}
+
+function setEditingChrome(){
+  var banner = $('editBanner');
+  if(editingId){
+    banner.classList.remove('hidden');
+    banner.textContent = 'Viewing saved trip ' + currentCounter + ' of '
+      + APP.formatStamp($('dateStamp').value)
+      + '. Changes are written back to this record when you tap Update trip.';
+    $('saveTripBtn').textContent = 'Update trip';
+    $('deleteTripBtn').style.display = '';
+  } else {
+    banner.classList.add('hidden');
+    $('saveTripBtn').textContent = 'Save trip';
+    $('deleteTripBtn').style.display = 'none';
+  }
+}
+
+function loadTrip(rec){
+  editingId = rec.id;
+  currentCounter = Number(rec.tripCounter);
+
+  setSelectValue($('vehicleSelect'), rec.vehicleKey || rec.vehicleNumber || '');
+  onVehicleChange();
+
+  setSelectValue($('vehicleTripToday'), rec.vehicleTripToday);
+  setSelectValue($('palletCount'), rec.palletCount);
+
+  refreshSequence(rec.palletSequence);
+
+  for(var g = 1; g <= C.DM_GROUPS; g++){
+    var m = (rec.manifests || [])[g - 1] || { merged: [] };
+    $('m' + g + '_truck').value = m.truck || '';
+    $('m' + g + '_master').value = m.master || '';
+    for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
+      $('m' + g + '_mp' + i).value = (m.merged || [])[i - 1] || '';
+    }
+  }
+  refreshManifestBadges();
+
+  setSelectValue($('driverNameSelect'), rec.driverEmpId || '');
+  setSelectValue($('driverIdSelect'), rec.driverEmpId || '');
+  onDriverChange();
+  setSelectValue($('dcIdSelect'), rec.dcEmpId || '');
+  setSelectValue($('dcNameSelect'), rec.dcEmpId || '');
+  onDcChange();
+
+  signatureData = rec.driverSignature || null;
+  empSignatureData = rec.dcSignature || null;
+  renderSignaturePreview();
+
+  $('dispatchAt').value = rec.dispatchAt || '';
+  setEditingChrome();
+}
+
+function startNewTrip(counter){
+  editingId = null;
+  currentCounter = counter;
+  clearManifestFields();
+  signatureData = null;
+  empSignatureData = null;
+  renderSignaturePreview();
+  $('dispatchAt').value = '';
+  refreshSequence();
+  setEditingChrome();
+}
+
+function setSelectValue(sel, val){
+  var v = String(val == null ? '' : val);
+  if(sel.querySelector('option[value="' + v.replace(/"/g, '\\"') + '"]')) sel.value = v;
 }
 
 /* ---------------- physical pallet sequence locking ---------------- */
-function refreshSequence(){
+function refreshSequence(forceValue){
   var sel = $('palletSequence');
   var iso = $('dateStamp').value;
   var veh = $('vehicleSelect').value;
@@ -1873,7 +2131,9 @@ function refreshSequence(){
   var maxUsed = -1;
   if(iso && veh){
     tripsCache.forEach(function(t){
-      if(t.dateStamp === iso && t.vehicleNumber === veh){
+      /* A trip being re-opened must not lock itself out. */
+      if(editingId && t.id === editingId) return;
+      if(t.dateStamp === iso && (t.vehicleKey || t.vehicleNumber) === veh){
         var s = Number(t.palletSequence);
         if(!isNaN(s) && s > maxUsed) maxUsed = s;
       }
@@ -1887,7 +2147,7 @@ function refreshSequence(){
     var o = document.createElement('option');
     o.value = String(i);
     o.textContent = String(i);
-    if(i <= maxUsed){
+    if(i <= maxUsed && String(i) !== String(forceValue)){
       o.disabled = true;
       o.textContent = i + ' — used';
     } else if(firstEnabled === null){
@@ -1896,7 +2156,10 @@ function refreshSequence(){
     sel.appendChild(o);
   }
 
-  if(previous && Number(previous) > maxUsed) sel.value = previous;
+  if(forceValue != null && sel.querySelector('option[value="' + forceValue + '"]')){
+    sel.value = String(forceValue);
+  }
+  else if(previous && Number(previous) > maxUsed) sel.value = previous;
   else if(firstEnabled !== null) sel.value = String(firstEnabled);
 
   if(!veh){
@@ -1923,8 +2186,9 @@ function refreshVehicleSelect(){
 
   Lists.sorted('vehicles').forEach(function(r){
     var o = document.createElement('option');
-    o.value = r.number;
-    o.textContent = r.number + (r.type ? ' · ' + r.type : '');
+    o.value = Lists.keyOf('vehicles', r);
+    o.textContent = (r.vehicleNo || r.truckId)
+      + (r.vehicleType ? ' · ' + r.vehicleType : '');
     sel.appendChild(o);
   });
   if(prev) sel.value = prev;
@@ -1933,9 +2197,17 @@ function refreshVehicleSelect(){
   onVehicleChange(true);
 }
 
+function selectedVehicle(){
+  var v = $('vehicleSelect').value;
+  return Lists.get('vehicles').filter(function(r){
+    return Lists.keyOf('vehicles', r) === v; })[0] || null;
+}
+
 function onVehicleChange(skipSeq){
   var v = $('vehicleSelect').value;
-  $('vehicleHeadVal').textContent = v || 'Not selected';
+  var rec = selectedVehicle();
+  $('vehicleHeadVal').textContent = rec
+    ? (rec.vehicleNo || rec.truckId) : 'Not selected';
   Lists.renderDetails('vehicles', $('vehicleDetails'), v);
   Lists.renderChips('vehicles', $('vehicleChips'), v);
   if(!skipSeq) refreshSequence();
@@ -2020,8 +2292,12 @@ function onDcChange(source){
 
 /* ---------------- signature ---------------- */
 var sigCtx = null, sigDrawing = false, sigDirty = false, sigLast = null;
+var sigTarget = 'driver';
 
-function openSignature(){
+function openSignature(target){
+  sigTarget = target || 'driver';
+  $('sigTitle').textContent = sigTarget === 'driver'
+    ? 'Driver signature' : 'DC employee signature';
   var ov = $('sigOverlay');
   ov.classList.add('show');
   var canvas = $('sigCanvas');
@@ -2041,10 +2317,11 @@ function openSignature(){
     sigCtx.lineJoin = 'round';
     sigDirty = false;
 
-    if(signatureData){
+    var existing = sigTarget === 'driver' ? signatureData : empSignatureData;
+    if(existing){
       var img = new Image();
       img.onload = function(){ sigCtx.drawImage(img, 0, 0, rect.width, rect.height); sigDirty = true; };
-      img.src = signatureData;
+      img.src = existing;
     }
   });
 }
@@ -2095,28 +2372,36 @@ function wireSignature(){
   });
   $('sigSaveBtn').addEventListener('click', function(){
     if(!sigDirty){ toast('Nothing drawn yet', true); return; }
-    signatureData = $('sigCanvas').toDataURL('image/png');
+    var data = $('sigCanvas').toDataURL('image/png');
+    if(sigTarget === 'driver') signatureData = data;
+    else empSignatureData = data;
     $('sigOverlay').classList.remove('show');
     renderSignaturePreview();
-    toast('Signature captured');
+    toast((sigTarget === 'driver' ? 'Driver' : 'DC employee') + ' signature captured');
   });
-  $('sigPreview').addEventListener('click', openSignature);
+  $('sigPreview').addEventListener('click', function(){ openSignature('driver'); });
+  $('empSigPreview').addEventListener('click', function(){ openSignature('emp'); });
 }
 
-function renderSignaturePreview(){
-  var box = $('sigPreview');
+function renderOneSignature(boxId, noteId, data){
+  var box = $(boxId);
   box.innerHTML = '';
-  if(signatureData){
+  if(data){
     box.classList.remove('blank');
     var img = document.createElement('img');
-    img.src = signatureData;
+    img.src = data;
     box.appendChild(img);
-    $('sigNote').textContent = 'Tap to re-sign or amend.';
+    $(noteId).textContent = 'Tap to re-sign or amend.';
   } else {
     box.classList.add('blank');
     box.textContent = 'Tap to sign';
-    $('sigNote').textContent = 'Opens a full-screen signing sheet.';
+    $(noteId).textContent = 'Opens a full-screen signing sheet.';
   }
+}
+
+function renderSignaturePreview(){
+  renderOneSignature('sigPreview', 'sigNote', signatureData);
+  renderOneSignature('empSigPreview', 'empSigNote', empSignatureData);
 }
 
 /* ---------------- save ---------------- */
@@ -2141,18 +2426,20 @@ function collectTrip(){
   var dispatchAuto = false;
   if(!dispatch){ dispatch = APP.nowLocalInput(); dispatchAuto = true; }
 
-  var vehRec = Lists.get('vehicles').filter(function(r){ return r.number === veh; })[0] || null;
+  var vehRec = selectedVehicle();
   var drvRec = Lists.get('drivers').filter(function(r){
     return r.empId === $('driverIdSelect').value; })[0] || null;
   var dcRec = Lists.get('dc').filter(function(r){
     return r.empId === $('dcIdSelect').value; })[0] || null;
 
   return {
-    id: APP.uid(),
+    id: editingId || APP.uid(),
     dateStamp: iso,
     dateDisplay: APP.formatStamp(iso),
-    tripCounter: Number($('tripCounter').textContent),
-    vehicleNumber: veh,
+    tripCounter: currentCounter,
+    vehicleKey: veh,
+    vehicleNumber: vehRec ? (vehRec.vehicleNo || vehRec.truckId) : veh,
+    truckId: vehRec ? (vehRec.truckId || '') : '',
     vehicle: vehRec ? Object.assign({}, vehRec) : null,
     vehicleTripToday: $('vehicleTripToday').value,
     palletCount: $('palletCount').value,
@@ -2163,6 +2450,7 @@ function collectTrip(){
     driverSignature: signatureData || '',
     dcEmpId: dcRec ? dcRec.empId : '',
     dcEmpName: dcRec ? dcRec.name : '',
+    dcSignature: empSignatureData || '',
     dispatchAt: dispatch,
     dispatchAuto: dispatchAuto,
     savedAt: new Date().toISOString()
@@ -2183,16 +2471,23 @@ function saveTrip(){
     return;
   }
 
+  var wasEditing = !!editingId;
   var rec = collectTrip();
   DB.putTrip(rec).then(function(){
     /* One shared reload keeps the form, records list and export stats
        reading the same data — never a private copy. */
     return APP.reloadTrips();
   }).then(function(){
-    toast('Trip ' + rec.tripCounter + ' saved'
+    toast('Trip ' + rec.tripCounter + (wasEditing ? ' updated' : ' saved')
       + (rec.dispatchAuto ? ' · dispatch time stamped' : ''));
     APP.flash();
-    clearAfterSave();
+    if(wasEditing){
+      /* Stay on the record that was just updated. */
+      refreshTripCounter(true);
+      setEditingChrome();
+    } else {
+      clearAfterSave();
+    }
   }).catch(function(e){
     toast('Save failed: ' + e.message, true);
   });
@@ -2210,12 +2505,15 @@ function clearManifestFields(){
 
 /* After a save, keep the crew and vehicle, clear the load-specific data. */
 function clearAfterSave(){
+  editingId = null;
   clearManifestFields();
   signatureData = null;
+  empSignatureData = null;
   renderSignaturePreview();
   $('dispatchAt').value = '';
   refreshTripCounter();
   refreshSequence();
+  setEditingChrome();
 }
 
 function resetForm(){
@@ -2223,8 +2521,10 @@ function resetForm(){
     'Clear every field on this trip, including the signature? Saved trips are not affected.',
     'Reset').then(function(ok){
     if(!ok) return;
+    editingId = null;
     clearManifestFields();
     signatureData = null;
+    empSignatureData = null;
     renderSignaturePreview();
     $('dateStamp').value = APP.todayISO();
     $('vehicleSelect').value = '';
@@ -2238,6 +2538,7 @@ function resetForm(){
     onVehicleChange();
     onDriverChange();
     onDcChange();
+    setEditingChrome();
     toast('Form reset');
   });
 }
@@ -2256,9 +2557,25 @@ Trip.init = function(trips){
   fillRange($('palletCount'), 0, C.PALLET_COUNT_MAX, 1);
 
   $('dateStamp').addEventListener('change', function(){
+    editingId = null;
     refreshDateStamp();
     refreshTripCounter();
     refreshSequence();
+    setEditingChrome();
+  });
+  $('tripCounter').addEventListener('change', onTripCounterChange);
+  $('deleteTripBtn').addEventListener('click', function(){
+    if(!editingId) return;
+    var id = editingId;
+    APP.confirmModal('Delete trip',
+      'Permanently delete saved trip ' + currentCounter + '?', 'Delete').then(function(ok){
+      if(!ok) return;
+      DB.deleteTrip(id).then(APP.reloadTrips).then(function(){
+        editingId = null;
+        clearAfterSave();
+        toast('Trip deleted');
+      });
+    });
   });
   $('vehicleSelect').addEventListener('change', function(){ onVehicleChange(); });
   $('driverNameSelect').addEventListener('change', function(){ onDriverChange('name'); });
@@ -2294,6 +2611,7 @@ Trip.init = function(trips){
   refreshDcSelects();
   refreshTripCounter();
   refreshSequence();
+  setEditingChrome();
 
   Lists.onChange(function(){
     refreshVehicleSelect();
@@ -2305,8 +2623,15 @@ Trip.init = function(trips){
 Trip.setTrips = function(trips){
   tripsCache = trips;
   APP.tripsCache = trips;
-  refreshTripCounter();
-  refreshSequence();
+  refreshTripCounter(true);
+  refreshSequence(editingId ? $('palletSequence').value : undefined);
+};
+Trip.openSaved = function(rec){
+  $('dateStamp').value = rec.dateStamp;
+  refreshDateStamp();
+  refreshTripCounter(false);
+  setSelectValue($('tripCounter'), rec.tripCounter);
+  loadTrip(rec);
 };
 
 Trip.groupFieldIds = groupFieldIds;
@@ -2419,9 +2744,13 @@ function openRecord(t){
   add('Trips counter', t.tripCounter);
   add('Vehicle number', t.vehicleNumber);
   if(t.vehicle){
-    add('Vehicle type', t.vehicle.type);
-    add('Capacity', t.vehicle.capacity);
-    add('Owner', t.vehicle.owner);
+    add('Truck ID', t.vehicle.truckId || t.truckId);
+    add('Vehicle type', t.vehicle.vehicleType);
+    add('Chassis number', t.vehicle.chassis);
+    add('Maker', t.vehicle.maker);
+    add('Model', t.vehicle.model);
+    add('Considered pallets count', t.vehicle.palletsCount);
+    add('Considered tonnage', t.vehicle.tonnage);
   }
   add('Vehicle trip of today', t.vehicleTripToday);
   add('Physical pallet count', t.palletCount);
@@ -2449,30 +2778,27 @@ function openRecord(t){
     wrap.appendChild(d2);
   });
 
-  if(t.driverSignature){
-    wrap.appendChild(el('div', 'subhead', 'Driver signature'));
+  function sigBlock(label, data){
+    if(!data) return;
+    wrap.appendChild(el('div', 'subhead', label));
     var box = el('div', 'sig-preview');
     var img = document.createElement('img');
-    img.src = t.driverSignature;
+    img.src = data;
     box.appendChild(img);
     wrap.appendChild(box);
   }
+  sigBlock('Driver signature', t.driverSignature);
+  sigBlock('DC employee signature', t.dcSignature);
 
   APP.showModal({
     title: 'Trip ' + t.tripCounter + ' · ' + t.dateDisplay,
     node: wrap,
-    okText: 'Delete trip',
-    cancelText: 'Close',
-    danger: true
-  }).then(function(del){
-    if(!del) return;
-    return APP.confirmModal('Delete trip',
-      'Permanently delete this trip record?', 'Delete').then(function(ok){
-      if(!ok) return;
-      return DB.deleteTrip(t.id).then(reloadTrips).then(function(){
-        toast('Trip deleted');
-      });
-    });
+    okText: 'Open in trip form',
+    cancelText: 'Close'
+  }).then(function(open){
+    if(!open) return;
+    showScreen('trip');
+    if(APP.Trip.openSaved) APP.Trip.openSaved(t);
   });
 }
 
@@ -2516,9 +2842,10 @@ function wireListsScreen(){
 
 /* ---------------- export ---------------- */
 function exportColumns(){
-  var cols = ['Date Stamp', 'Date', 'Trips Counter', 'Vehicle Number', 'Vehicle Type',
-              'Vehicle Capacity', 'Vehicle Owner', 'Vehicle Trip of Today',
-              'Physical Pallet Count', 'Physical Pallet Sequence'];
+  var cols = ['Date Stamp', 'Date', 'Trips Counter', 'Truck ID', 'Vehicle No.',
+              'Vehicle Type', 'Chassis Number', 'Maker', 'Model',
+              'Considered Pallets Count', 'Considered Tonnage',
+              'Vehicle Trip of Today', 'Physical Pallet Count', 'Physical Pallet Sequence'];
   for(var g = 1; g <= C.DM_GROUPS; g++){
     cols.push('DM' + g + ' Truck Manifest ' + g);
     cols.push('DM' + g + ' Master Pallet Manifest');
@@ -2527,15 +2854,17 @@ function exportColumns(){
     }
   }
   cols.push('Driver Name', 'Driver Employee ID', 'Driver Signature',
-            'DC Employee ID', 'DC Employee Name',
+            'DC Employee ID', 'DC Employee Name', 'DC Employee Signature',
             'Dispatch Date & Time', 'Dispatch Time Source', 'Saved At');
   return cols;
 }
 
 function tripRow(t){
   var v = t.vehicle || {};
-  var row = [t.dateStamp, t.dateDisplay, t.tripCounter, t.vehicleNumber,
-             v.type || '', v.capacity || '', v.owner || '',
+  var row = [t.dateStamp, t.dateDisplay, t.tripCounter,
+             v.truckId || t.truckId || '', t.vehicleNumber || v.vehicleNo || '',
+             v.vehicleType || '', v.chassis || '', v.maker || '', v.model || '',
+             v.palletsCount || '', v.tonnage || '',
              t.vehicleTripToday, t.palletCount, t.palletSequence];
   for(var g = 0; g < C.DM_GROUPS; g++){
     var m = (t.manifests || [])[g] || { merged: [] };
@@ -2548,6 +2877,7 @@ function tripRow(t){
   row.push(t.driverName || '', t.driverEmpId || '',
            t.driverSignature ? 'Signed' : 'Not signed',
            t.dcEmpId || '', t.dcEmpName || '',
+           t.dcSignature ? 'Signed' : 'Not signed',
            formatDispatch(t.dispatchAt),
            t.dispatchAuto ? 'Auto on save' : 'Entered manually',
            t.savedAt || '');
