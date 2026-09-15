@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V1</title>
+<title>Dispatch Manifest V2</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -411,7 +411,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V1</h1>
+  <h1>Dispatch Manifest V2</h1>
 </div>
 
 <div class="screens">
@@ -1503,52 +1503,143 @@ function shareAsQr(which){
 }
 Lists.shareAsQr = shareAsQr;
 
-/* ---------------- QR import (multi-part) ---------------- */
+/* ---------------- QR import ----------------
+   Three accepted payload shapes:
+     1. One envelope            DMQ1|DRV|1|1|[...]
+     2. Several envelopes glued together, in any order, separated by
+        ';', a newline, or nothing at all — what you get when a
+        spreadsheet joins one-row-per-record envelopes into one code.
+     3. A bare JSON array or object with no envelope at all.
+   Multi-part sets produced by "Share as QR" still reassemble by part number.  */
+
+function splitEnvelopes(text){
+  var idx = [], re = /DMQ1\|/g, m;
+  while((m = re.exec(text)) !== null) idx.push(m.index);
+  if(idx.length < 2) return null;
+  var segs = [];
+  for(var i = 0; i < idx.length; i++){
+    var end = (i + 1 < idx.length) ? idx[i + 1] : text.length;
+    segs.push(text.slice(idx[i], end).replace(/[;,\s]+$/, ''));
+  }
+  return segs;
+}
+
+/* Returns {records:[...]} , {kindMismatch:'XXX'} , or null if this is not
+   a clean set of self-contained single-part envelopes. */
+function readEnvelopeSequence(text, kind){
+  var segs = splitEnvelopes(text);
+  if(!segs) return null;
+  var out = [];
+  for(var i = 0; i < segs.length; i++){
+    var p = APP.parseQrPart(segs[i]);
+    if(!p) return null;
+    if(p.kind !== kind) return { kindMismatch: p.kind };
+    /* A multi-part set must go through the part-number path instead. */
+    if(p.total !== 1 || p.part !== 1) return null;
+    var arr;
+    try { arr = JSON.parse(p.data); } catch(e){ return null; }
+    if(!Array.isArray(arr)) return null;
+    out = out.concat(arr);
+  }
+  return { records: out, codes: segs.length };
+}
+
+function readBareJson(text){
+  var t = String(text == null ? '' : text).trim();
+  if(t.charAt(0) !== '[' && t.charAt(0) !== '{') return null;
+  var v;
+  try { v = JSON.parse(t); } catch(e){ return null; }
+  if(Array.isArray(v)) return v;
+  if(v && typeof v === 'object') return [v];
+  return null;
+}
+
+/* A scanning session. feed(text) -> {status:'done'|'more'|'dup'|'error', ...} */
+function makeImportSession(which){
+  var sc = SCHEMAS[which];
+  var got = {}, total = null, seen = {};
+
+  return {
+    feed: function(text){
+      /* The camera fires many times a second on the same code — take each
+         distinct payload once so batch scanning can stay open. */
+      if(seen[text]) return { status: 'dup' };
+
+      /* Several envelopes in one code */
+      var seq = readEnvelopeSequence(text, sc.qrKind);
+      if(seq && seq.kindMismatch){
+        return { status: 'error', message: 'That code holds a different list ('
+                 + seq.kindMismatch + ')' };
+      }
+      if(seq && seq.records){
+        seen[text] = true;
+        return { status: 'done', records: seq.records, codes: seq.codes };
+      }
+
+      var part = APP.parseQrPart(text);
+      if(!part){
+        var bare = readBareJson(text);
+        if(bare){ seen[text] = true; return { status: 'done', records: bare, codes: 1 }; }
+        return { status: 'error', message: 'That is not a Dispatch Manifest list code' };
+      }
+      if(part.kind !== sc.qrKind){
+        return { status: 'error', message: 'That code holds a different list ('
+                 + part.kind + ')' };
+      }
+
+      total = part.total;
+      got[part.part] = part.data;
+      var have = Object.keys(got).length;
+      if(have < total){
+        return { status: 'more',
+                 message: 'Captured ' + have + ' of ' + total + ' — keep scanning' };
+      }
+
+      var joined = '';
+      for(var i = 1; i <= total; i++) joined += got[i];
+      var records;
+      try { records = JSON.parse(joined); }
+      catch(e){
+        got = {}; total = null;
+        return { status: 'error', message: 'Codes did not reassemble — rescan the set' };
+      }
+      if(!Array.isArray(records)){
+        return { status: 'error', message: 'Unexpected list contents' };
+      }
+      seen[text] = true;
+      got = {}; total = null;
+      return { status: 'done', records: records, codes: part.total };
+    }
+  };
+}
+Lists.makeImportSession = makeImportSession;
+
 function importByQr(which){
   var sc = SCHEMAS[which];
-  var got = {}, total = null;
+  var session = makeImportSession(which);
+  var runAdded = 0, runUpdated = 0, runCodes = 0;
 
   APP.openScanner({
     title: 'Import ' + sc.label.toLowerCase() + ' list',
     mode: 'qr',
     hint: 'Scan the list QR code',
     onHit: function(text){
-      var part = APP.parseQrPart(text);
-      if(!part){
-        APP.setScanMsg('That is not a Dispatch Manifest list code', 'err');
-        return false;
-      }
-      if(part.kind !== sc.qrKind){
-        APP.setScanMsg('That code holds a different list (' + part.kind + ')', 'err');
-        return false;
-      }
-      total = part.total;
-      got[part.part] = part.data;
+      var res = session.feed(text);
+      if(res.status === 'dup') return false;
+      if(res.status === 'error'){ APP.setScanMsg(res.message, 'err'); return false; }
+      if(res.status === 'more'){ APP.setScanMsg(res.message, 'live'); return false; }
 
-      var have = Object.keys(got).length;
-      if(have < total){
-        APP.setScanMsg('Captured ' + have + ' of ' + total + ' — keep scanning', 'live');
-        return false;
-      }
-
-      var joined = '';
-      for(var i = 1; i <= total; i++) joined += got[i];
-      var records;
-      try {
-        records = JSON.parse(joined);
-      } catch(e){
-        APP.setScanMsg('Codes did not reassemble — rescan the set', 'err');
-        got = {}; total = null;
-        return false;
-      }
-      if(!Array.isArray(records)){
-        APP.setScanMsg('Unexpected list contents', 'err');
-        return false;
-      }
-      mergeInto(which, records, 'replace').then(function(res){
-        toast(res.added + ' added, ' + res.updated + ' updated');
+      runCodes++;
+      mergeInto(which, res.records, 'replace').then(function(r){
+        runAdded += r.added;
+        runUpdated += r.updated;
+        APP.setScanMsg(runAdded + ' added, ' + runUpdated + ' updated from '
+          + runCodes + ' code' + (runCodes === 1 ? '' : 's')
+          + ' — scan the next one or tap Close', 'live');
+        toast(r.added + ' added, ' + r.updated + ' updated');
       });
-      return true;
+      /* Stay open: a spreadsheet usually produces a column of codes. */
+      return false;
     }
   });
 }
