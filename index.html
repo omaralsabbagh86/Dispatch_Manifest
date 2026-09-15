@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V6</title>
+<title>Dispatch Manifest V7</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -442,7 +442,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V6</h1>
+  <h1>Dispatch Manifest V7</h1>
 </div>
 
 <div class="screens">
@@ -503,17 +503,20 @@ select:disabled,option:disabled{color:#5B646C;}
       </div>
       <div class="field">
         <label for="bayNo">Bay No.</label>
-        <div class="scanfield">
-          <input id="bayNo" type="text" autocomplete="off" placeholder="Type or scan">
-          <button class="iconbtn" id="bayNoScan" title="Scan Bay No."></button>
-        </div>
+        <input id="bayNo" type="text" list="bayList" autocomplete="off"
+               inputmode="numeric" placeholder="Select or type">
+        <datalist id="bayList"></datalist>
       </div>
       <div class="field">
         <label for="otlSeal">OTL (Seal No.)</label>
-        <div class="scanfield">
-          <input id="otlSeal" type="text" autocomplete="off" placeholder="Type or scan">
-          <button class="iconbtn" id="otlSealScan" title="Scan OTL seal number"></button>
-        </div>
+        <input id="otlSeal" type="text" autocomplete="off" maxlength="12"
+               placeholder="Up to 12 characters">
+        <div class="seq-note" id="otlNote">Letters and numbers, upper case, 12 max.</div>
+      </div>
+      <div class="field full">
+        <label for="branchSelect">To Branch</label>
+        <select id="branchSelect"><option value="">— Select branch —</option></select>
+        <div id="branchDetails"></div>
       </div>
     </div>
 
@@ -666,7 +669,8 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-scan="vehicles">Import by QR</button>
           <button class="btn small" data-list-qr="vehicles">Share as QR</button>
           <button class="btn small" data-list-csv="vehicles">Export CSV</button>
-          <button class="btn small" data-list-imp="vehicles">Import CSV</button>
+          <button class="btn small" data-list-xlsx="vehicles">Export XLSX</button>
+          <button class="btn small" data-list-imp="vehicles">Import file</button>
           <button class="btn small danger" data-list-clear="vehicles">Clear</button>
         </div>
         <div class="chip-list" id="listVehChips" style="max-height:none;"></div>
@@ -684,10 +688,30 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-scan="drivers">Import by QR</button>
           <button class="btn small" data-list-qr="drivers">Share as QR</button>
           <button class="btn small" data-list-csv="drivers">Export CSV</button>
-          <button class="btn small" data-list-imp="drivers">Import CSV</button>
+          <button class="btn small" data-list-xlsx="drivers">Export XLSX</button>
+          <button class="btn small" data-list-imp="drivers">Import file</button>
           <button class="btn small danger" data-list-clear="drivers">Clear</button>
         </div>
         <div class="chip-list" id="listDrvChips" style="max-height:none;"></div>
+      </div></div>
+    </div>
+
+    <div class="panel open" id="listBrnPanel">
+      <div class="panel-head" data-toggle="listBrnPanel">
+        <span class="ttl">Branches</span><span class="sub" id="listBrnCount"></span>
+        <span class="twist">&#9654;</span>
+      </div>
+      <div class="panel-body"><div class="panel-more" style="border-top:none;margin-top:0;padding-top:0;">
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button class="btn small" data-list-add="branches">Add</button>
+          <button class="btn small" data-list-scan="branches">Import by QR</button>
+          <button class="btn small" data-list-qr="branches">Share as QR</button>
+          <button class="btn small" data-list-csv="branches">Export CSV</button>
+          <button class="btn small" data-list-xlsx="branches">Export XLSX</button>
+          <button class="btn small" data-list-imp="branches">Import file</button>
+          <button class="btn small danger" data-list-clear="branches">Clear</button>
+        </div>
+        <div class="chip-list" id="listBrnChips" style="max-height:none;"></div>
       </div></div>
     </div>
 
@@ -702,11 +726,24 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-scan="dc">Import by QR</button>
           <button class="btn small" data-list-qr="dc">Share as QR</button>
           <button class="btn small" data-list-csv="dc">Export CSV</button>
-          <button class="btn small" data-list-imp="dc">Import CSV</button>
+          <button class="btn small" data-list-xlsx="dc">Export XLSX</button>
+          <button class="btn small" data-list-imp="dc">Import file</button>
           <button class="btn small danger" data-list-clear="dc">Clear</button>
         </div>
         <div class="chip-list" id="listDcChips" style="max-height:none;"></div>
       </div></div>
+    </div>
+    <div class="section-label">Defaults</div>
+    <div class="form-grid">
+      <div class="field full">
+        <label for="otlDefault">Default OTL (Seal No.)</label>
+        <div class="scanfield">
+          <input id="otlDefault" type="text" maxlength="12" autocomplete="off"
+                 placeholder="Leave empty for none">
+          <button class="iconbtn wide" id="otlDefaultSave">Save</button>
+        </div>
+        <div class="seq-note">Pre-filled into the OTL field on every new trip.</div>
+      </div>
     </div>
     <div style="height:14px;"></div>
   </section>
@@ -737,6 +774,10 @@ select:disabled,option:disabled{color:#5B646C;}
     <div class="export-tile">
       <div class="info"><div class="fmt">Import backup</div><div class="desc">Merges a JSON backup into this device</div></div>
       <button class="btn small" id="impJson">Choose file</button>
+    </div>
+    <div class="export-tile">
+      <div class="info"><div class="fmt">Import trips</div><div class="desc">From a CSV or XLSX exported above</div></div>
+      <button class="btn small" id="impTable">Choose file</button>
     </div>
 
     <div class="section-label">Danger Zone</div>
@@ -896,6 +937,12 @@ function nowLocalInput(){
        + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
 }
 function digitsOnly(s){ return String(s == null ? '' : s).replace(/\D+/g, ''); }
+/* Manifest numbers carry letters as well as digits (e.g. PL100049086),
+   so these are folded to upper case rather than stripped to digits. */
+function alnum(s, max){
+  var v = String(s == null ? '' : s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return (max && v.length > max) ? v.slice(0, max) : v;
+}
 function uid(){
   return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
 }
@@ -903,6 +950,7 @@ APP.formatStamp = formatStamp;
 APP.todayISO = todayISO;
 APP.nowLocalInput = nowLocalInput;
 APP.digitsOnly = digitsOnly;
+APP.alnum = alnum;
 APP.uid = uid;
 APP.pad2 = pad2;
 
@@ -1514,6 +1562,40 @@ function parseCsv(text){
 }
 APP.parseCsv = parseCsv;
 
+/* Reads .csv, .xlsx and .xlsm into plain rows so every importer can take
+   either format without caring which it was handed. */
+function readTable(file){
+  var name = String(file.name || '').toLowerCase();
+  if(/\.(xlsx|xlsm|xls)$/.test(name)){
+    return file.arrayBuffer().then(function(buf){
+      var wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      if(!ws) return [];
+      return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+    });
+  }
+  return file.text().then(parseCsv);
+}
+APP.readTable = readTable;
+
+/* Writes rows out as .csv or .xlsx from one call site. */
+function writeTable(rows, baseName, fmt, sheetName){
+  if(fmt === 'xlsx'){
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = (rows[0] || []).map(function(c){
+      return { wch: Math.min(30, Math.max(12, String(c).length + 2)) };
+    });
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Sheet1');
+    var out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    downloadBlob(new Blob([out], { type: 'application/octet-stream' }), baseName + '.xlsx');
+  } else {
+    downloadBlob(new Blob(['\uFEFF' + toCsv(rows)], { type: 'text/csv;charset=utf-8' }),
+      baseName + '.csv');
+  }
+}
+APP.writeTable = writeTable;
+
 function downloadBlob(blob, filename){
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
@@ -1598,6 +1680,25 @@ var SCHEMAS = {
     display: function(r){ return r.name; },
     chip: function(r){ return r.name + ' · ' + (r.empId || r.driverId); }
   },
+  branches: {
+    store: 'branches',
+    label: 'Branch',
+    key: 'code',
+    qrKind: 'BRN',
+    fields: [
+      { k: 'code',  l: 'Branch code', req: true,
+        a: ['branch code', 'branchcode', 'code'] },
+      { k: 'name',  l: 'Branch Name', req: true,
+        a: ['branch name', 'branchname', 'name'] },
+      { k: 'coords', l: 'Location coordination',
+        a: ['location coordination', 'coordinates', 'coordination', 'latlng', 'gps'] },
+      { k: 'link',  l: 'Location link',
+        a: ['location link', 'map link', 'maplink', 'url'] }
+    ],
+    keyOf: function(r){ return r.code || r.name; },
+    display: function(r){ return r.name || r.code; },
+    chip: function(r){ return (r.code || '?') + ' · ' + (r.name || ''); }
+  },
   dc: {
     store: 'dc',
     label: 'DC employee',
@@ -1649,7 +1750,8 @@ function normaliseRecord(which, raw){
   return out;
 }
 
-var cache = { vehicles: [], drivers: [], dc: [] };
+var cache = { vehicles: [], drivers: [], dc: [], branches: [] };
+var settings = { otlDefault: '' };
 var subscribers = [];
 
 var Lists = APP.Lists = {
@@ -1657,9 +1759,19 @@ var Lists = APP.Lists = {
   get: function(which){ return cache[which] || []; },
   onChange: function(fn){ subscribers.push(fn); },
   loadAll: function(){
-    return Promise.all(['vehicles', 'drivers', 'dc'].map(function(w){
+    return Promise.all(['vehicles', 'drivers', 'dc', 'branches'].map(function(w){
       return DB.getList(SCHEMAS[w].store).then(function(items){ cache[w] = items || []; });
-    })).then(function(){ notify(); });
+    })).then(function(){
+      return DB.getList('settings');
+    }).then(function(rows){
+      var row = (rows && rows[0]) || {};
+      settings.otlDefault = row.otlDefault || '';
+    }).then(function(){ notify(); });
+  },
+  getSetting: function(k){ return settings[k]; },
+  setSetting: function(k, v){
+    settings[k] = v;
+    return DB.putList('settings', [ { otlDefault: settings.otlDefault } ]).then(notify);
   },
   save: function(which, items){
     cache[which] = items;
@@ -2020,7 +2132,7 @@ function importByQr(which){
 Lists.importByQr = importByQr;
 
 /* ---------------- CSV ---------------- */
-function exportCsv(which){
+function exportTable(which, fmt){
   var sc = SCHEMAS[which];
   var items = cache[which];
   if(!items.length){ toast('Nothing to export', true); return; }
@@ -2029,17 +2141,15 @@ function exportCsv(which){
   items.forEach(function(r){
     rows.push(cols.map(function(c){ return r[c] == null ? '' : r[c]; }));
   });
-  APP.downloadBlob(new Blob(['\uFEFF' + APP.toCsv(rows)], { type: 'text/csv;charset=utf-8' }),
-    which + '-list.csv');
+  APP.writeTable(rows, which + '-list', fmt, sc.label);
 }
-Lists.exportCsv = exportCsv;
+Lists.exportTable = exportTable;
 
-function importCsv(which){
+function importTable(which){
   var sc = SCHEMAS[which];
-  APP.pickFile('.csv,text/csv').then(function(file){
+  APP.pickFile('.csv,.xlsx,.xlsm').then(function(file){
     if(!file) return;
-    return file.text().then(function(text){
-      var rows = APP.parseCsv(text);
+    return APP.readTable(file).then(function(rows){
       if(rows.length < 2){ toast('That file has no data rows', true); return; }
       var header = rows[0].map(function(h){ return String(h).trim(); });
       var records = rows.slice(1).map(function(r){
@@ -2059,7 +2169,7 @@ function importCsv(which){
     });
   }).catch(function(e){ toast('Import failed: ' + e.message, true); });
 }
-Lists.importCsv = importCsv;
+Lists.importTable = importTable;
 
 function clearList(which){
   var sc = SCHEMAS[which];
@@ -2107,12 +2217,15 @@ function makeScanField(id, label){
   var inp = document.createElement('input');
   inp.id = id;
   inp.type = 'text';
-  inp.inputMode = 'numeric';
   inp.autocomplete = 'off';
   inp.placeholder = 'Type or scan';
   inp.addEventListener('input', function(){
-    var clean = APP.digitsOnly(inp.value);
-    if(clean !== inp.value) inp.value = clean;
+    var pos = inp.selectionStart;
+    var clean = APP.alnum(inp.value);
+    if(clean !== inp.value){
+      inp.value = clean;
+      try { inp.setSelectionRange(pos, pos); } catch(e){}
+    }
     refreshManifestBadges();
   });
 
@@ -2126,12 +2239,12 @@ function makeScanField(id, label){
       mode: 'any',
       hint: 'Scan a Code 128 or QR code',
       onHit: function(text){
-        var digits = APP.digitsOnly(text);
-        if(!digits){
-          APP.setScanMsg('That code holds no digits', 'err');
+        var value = APP.alnum(text);
+        if(!value){
+          APP.setScanMsg('That code holds no usable characters', 'err');
           return false;
         }
-        inp.value = digits;
+        inp.value = value;
         refreshManifestBadges();
         toast(label + ' captured');
         return true;
@@ -2143,25 +2256,6 @@ function makeScanField(id, label){
   row.appendChild(btn);
   fld.appendChild(row);
   return fld;
-}
-
-/* Bay No. and the OTL seal can be alphanumeric, so these keep whatever
-   the label carries rather than stripping to digits. */
-function wirePlainScan(inputId, btnId, label){
-  var btn = $(btnId);
-  btn.innerHTML = scanIcon();
-  btn.addEventListener('click', function(){
-    APP.openScanner({
-      title: label, mode: 'any', hint: 'Scan a Code 128 or QR code',
-      onHit: function(text){
-        var v = String(text || '').trim();
-        if(!v){ APP.setScanMsg('That code is empty', 'err'); return false; }
-        $(inputId).value = v;
-        toast(label + ' captured');
-        return true;
-      }
-    });
-  });
 }
 
 /* ---------------- manifest field ids ---------------- */
@@ -2328,6 +2422,8 @@ function loadTrip(rec){
 
   $('bayNo').value = rec.bayNo || '';
   $('otlSeal').value = rec.otlSeal || '';
+  setSelectValue($('branchSelect'), rec.branchCode || '');
+  onBranchChange();
 
   /* Records written before pallets existed carry a single manifest set. */
   pallets = (rec.pallets && rec.pallets.length)
@@ -2363,7 +2459,9 @@ function startNewTrip(counter){
   currentCounter = counter;
   pallets = [];
   $('bayNo').value = '';
-  $('otlSeal').value = '';
+  $('otlSeal').value = Lists.getSetting('otlDefault') || '';
+  $('branchSelect').value = '';
+  onBranchChange();
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
@@ -2435,6 +2533,46 @@ function refreshSequence(forceValue){
     note.textContent = 'Locked ' + C.SEQ_MIN + '–' + maxUsed
       + ' (already used for this vehicle and date). Next available is ' + firstEnabled + '.';
   }
+}
+
+/* ---------------- bay no. ---------------- */
+/* A datalist keeps the 0-30 list one tap away without blocking a manual value. */
+function buildBayList(){
+  var dl = $('bayList');
+  dl.innerHTML = '';
+  for(var i = 0; i <= 30; i++){
+    var o = document.createElement('option');
+    o.value = String(i);
+    dl.appendChild(o);
+  }
+}
+
+/* ---------------- to branch ---------------- */
+function refreshBranchSelect(){
+  var sel = $('branchSelect');
+  var prev = sel.value;
+  sel.innerHTML = '';
+  var blank = document.createElement('option');
+  blank.value = ''; blank.textContent = '— Select branch —';
+  sel.appendChild(blank);
+  Lists.sorted('branches').forEach(function(r){
+    var o = document.createElement('option');
+    o.value = Lists.keyOf('branches', r);
+    o.textContent = (r.code ? r.code + ' · ' : '') + (r.name || '');
+    sel.appendChild(o);
+  });
+  if(prev) sel.value = prev;
+  onBranchChange();
+}
+
+function selectedBranch(){
+  var v = $('branchSelect').value;
+  return Lists.get('branches').filter(function(r){
+    return Lists.keyOf('branches', r) === v; })[0] || null;
+}
+
+function onBranchChange(){
+  Lists.renderDetails('branches', $('branchDetails'), $('branchSelect').value);
 }
 
 /* ---------------- vehicle ---------------- */
@@ -2848,6 +2986,7 @@ function collectTrip(){
     return r.empId === $('driverIdSelect').value; })[0] || null;
   var dcRec = Lists.get('dc').filter(function(r){
     return r.empId === $('dcIdSelect').value; })[0] || null;
+  var brnRec = selectedBranch();
 
   return {
     id: editingId || APP.uid(),
@@ -2861,7 +3000,9 @@ function collectTrip(){
     vehicleTripToday: $('vehicleTripToday').value,
     palletCount: $('palletCount').value,
     bayNo: $('bayNo').value.trim(),
-    otlSeal: $('otlSeal').value.trim(),
+    otlSeal: APP.alnum($('otlSeal').value, 12),
+    branchCode: brnRec ? (brnRec.code || '') : $('branchSelect').value,
+    branch: brnRec ? Object.assign({}, brnRec) : null,
     pallets: pallets.map(function(p){
       return { sequence: p.sequence, manifests: p.manifests };
     }),
@@ -2944,7 +3085,9 @@ function clearAfterSave(){
   editingId = null;
   pallets = [];
   $('bayNo').value = '';
-  $('otlSeal').value = '';
+  $('otlSeal').value = Lists.getSetting('otlDefault') || '';
+  $('branchSelect').value = '';
+  onBranchChange();
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
@@ -2965,7 +3108,8 @@ function resetAll(){
 
   $('dateStamp').value = APP.todayISO();
   $('bayNo').value = '';
-  $('otlSeal').value = '';
+  $('otlSeal').value = Lists.getSetting('otlDefault') || '';
+  $('branchSelect').value = '';
   $('vehicleSelect').value = '';
   $('driverNameSelect').value = '';
   $('driverIdSelect').value = '';
@@ -2996,6 +3140,7 @@ function resetAll(){
   onVehicleChange();
   onDriverChange();
   onDcChange();
+  onBranchChange();
   /* Forced last: onVehicleChange would otherwise keep the previous number. */
   refreshSequence(String(C.SEQ_MIN));
   $('palletSequence').value = String(C.SEQ_MIN);
@@ -3058,8 +3203,13 @@ Trip.init = function(trips){
   $('dcIdSelect').addEventListener('change', function(){ onDcChange('id'); });
   $('dcNameSelect').addEventListener('change', function(){ onDcChange('name'); });
 
-  wirePlainScan('bayNo', 'bayNoScan', 'Bay No.');
-  wirePlainScan('otlSeal', 'otlSealScan', 'OTL (Seal No.)');
+  buildBayList();
+  $('otlSeal').addEventListener('input', function(){
+    var inp = $('otlSeal');
+    var clean = APP.alnum(inp.value, 12);
+    if(clean !== inp.value) inp.value = clean;
+  });
+  $('branchSelect').addEventListener('change', onBranchChange);
   $('palletCount').addEventListener('change', renderPalletChips);
 
   $('dispatchNowBtn').addEventListener('click', function(){
@@ -3088,6 +3238,7 @@ Trip.init = function(trips){
   refreshVehicleSelect();
   refreshDriverSelects();
   refreshDcSelects();
+  refreshBranchSelect();
   refreshTripCounter();
   refreshSequence();
   setEditingChrome();
@@ -3096,6 +3247,7 @@ Trip.init = function(trips){
     refreshVehicleSelect();
     refreshDriverSelects();
     refreshDcSelects();
+    refreshBranchSelect();
   });
 };
 
@@ -3242,6 +3394,11 @@ function openRecord(t){
   add('Physical pallet count', t.palletCount);
   add('Bay No.', t.bayNo);
   add('OTL (Seal No.)', t.otlSeal);
+  add('To Branch', t.branch ? (t.branch.code + ' · ' + t.branch.name) : t.branchCode);
+  if(t.branch){
+    add('Branch location', t.branch.coords);
+    add('Branch link', t.branch.link);
+  }
   add('Pallets captured', tripPallets(t).length);
   add('Driver', t.driverName ? t.driverName + ' · ' + t.driverEmpId : '');
   add('DC employee', t.dcEmpName ? t.dcEmpName + ' · ' + t.dcEmpId : '');
@@ -3310,9 +3467,13 @@ function renderListsScreen(){
   Lists.renderChips('vehicles', $('listVehChips'), null);
   Lists.renderChips('drivers', $('listDrvChips'), null);
   Lists.renderChips('dc', $('listDcChips'), null);
+  Lists.renderChips('branches', $('listBrnChips'), null);
   $('listVehCount').textContent = Lists.get('vehicles').length + ' stored';
   $('listDrvCount').textContent = Lists.get('drivers').length + ' stored';
   $('listDcCount').textContent = Lists.get('dc').length + ' stored';
+  $('listBrnCount').textContent = Lists.get('branches').length + ' stored';
+  var otl = $('otlDefault');
+  if(document.activeElement !== otl) otl.value = Lists.getSetting('otlDefault') || '';
 }
 
 function wireListsScreen(){
@@ -3326,10 +3487,28 @@ function wireListsScreen(){
     b.addEventListener('click', function(){ Lists.shareAsQr(b.getAttribute('data-list-qr')); });
   });
   document.querySelectorAll('[data-list-csv]').forEach(function(b){
-    b.addEventListener('click', function(){ Lists.exportCsv(b.getAttribute('data-list-csv')); });
+    b.addEventListener('click', function(){
+      Lists.exportTable(b.getAttribute('data-list-csv'), 'csv'); });
+  });
+  document.querySelectorAll('[data-list-xlsx]').forEach(function(b){
+    b.addEventListener('click', function(){
+      Lists.exportTable(b.getAttribute('data-list-xlsx'), 'xlsx'); });
   });
   document.querySelectorAll('[data-list-imp]').forEach(function(b){
-    b.addEventListener('click', function(){ Lists.importCsv(b.getAttribute('data-list-imp')); });
+    b.addEventListener('click', function(){ Lists.importTable(b.getAttribute('data-list-imp')); });
+  });
+
+  $('otlDefaultSave').addEventListener('click', function(){
+    var v = APP.alnum($('otlDefault').value, 12);
+    $('otlDefault').value = v;
+    Lists.setSetting('otlDefault', v).then(function(){
+      toast(v ? 'Default OTL saved' : 'Default OTL cleared');
+    });
+  });
+  $('otlDefault').addEventListener('input', function(){
+    var el = $('otlDefault');
+    var clean = APP.alnum(el.value, 12);
+    if(clean !== el.value) el.value = clean;
   });
   document.querySelectorAll('[data-list-clear]').forEach(function(b){
     b.addEventListener('click', function(){ Lists.clearList(b.getAttribute('data-list-clear')); });
@@ -3342,7 +3521,9 @@ function exportColumns(){
               'Vehicle Type', 'Chassis Number', 'Maker', 'Model',
               'Considered Pallets Count', 'Considered Tonnage',
               'Vehicle Trip of Today', 'Physical Pallet Count',
-              'Bay No.', 'OTL (Seal No.)', 'Physical Pallet Sequence'];
+              'Bay No.', 'OTL (Seal No.)', 'To Branch Code', 'To Branch Name',
+              'Branch Location Coordination', 'Branch Location Link',
+              'Physical Pallet Sequence'];
   for(var g = 1; g <= C.DM_GROUPS; g++){
     cols.push('DM' + g + ' Truck Manifest ' + g);
     cols.push('DM' + g + ' Master Pallet Manifest');
@@ -3371,7 +3552,12 @@ function tripRow(t, pallet){
              v.vehicleType || '', v.chassis || '', v.maker || '', v.model || '',
              v.palletsCount || '', v.tonnage || '',
              t.vehicleTripToday, t.palletCount,
-             t.bayNo || '', t.otlSeal || '', pallet.sequence];
+             t.bayNo || '', t.otlSeal || '',
+             (t.branch && t.branch.code) || t.branchCode || '',
+             (t.branch && t.branch.name) || '',
+             (t.branch && t.branch.coords) || '',
+             (t.branch && t.branch.link) || '',
+             pallet.sequence];
   for(var g = 0; g < C.DM_GROUPS; g++){
     var m = (pallet.manifests || [])[g] || { merged: [] };
     row.push(m.truck || '');
@@ -3390,31 +3576,122 @@ function tripRow(t, pallet){
   return row;
 }
 
-function exportCsvTrips(){
+function exportTrips(fmt){
   if(!trips.length){ toast('No trips to export', true); return; }
   var rows = [exportColumns()];
   trips.slice().reverse().forEach(function(t){
     tripPallets(t).forEach(function(p){ rows.push(tripRow(t, p)); });
   });
-  APP.downloadBlob(new Blob(['\uFEFF' + APP.toCsv(rows)], { type: 'text/csv;charset=utf-8' }),
-    'dispatch-manifest-' + APP.todayISO() + '.csv');
+  APP.writeTable(rows, 'dispatch-manifest-' + APP.todayISO(), fmt, 'Trips');
 }
 
-function exportXlsxTrips(){
-  if(!trips.length){ toast('No trips to export', true); return; }
-  var rows = [exportColumns()];
-  trips.slice().reverse().forEach(function(t){
-    tripPallets(t).forEach(function(p){ rows.push(tripRow(t, p)); });
-  });
-  var ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = exportColumns().map(function(c){
-    return { wch: Math.min(30, Math.max(12, c.length + 2)) };
-  });
-  var wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Trips');
-  var out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  APP.downloadBlob(new Blob([out], { type: 'application/octet-stream' }),
-    'dispatch-manifest-' + APP.todayISO() + '.xlsx');
+/* Reads back a sheet this app exported: one row per pallet, so rows sharing a
+   date and trip counter are folded into a single trip with several pallets. */
+function normHeader(h){
+  return String(h == null ? '' : h).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function importTripsTable(){
+  APP.pickFile('.csv,.xlsx,.xlsm').then(function(file){
+    if(!file) return;
+    return APP.readTable(file).then(function(rows){
+      if(!rows || rows.length < 2){ toast('That file has no data rows', true); return; }
+      var header = rows[0].map(function(h){ return String(h).trim(); });
+      var idx = {};
+      header.forEach(function(h, i){ idx[normHeader(h)] = i; });
+      function cell(r, name){
+        var i = idx[normHeader(name)];
+        return i == null ? '' : String(r[i] == null ? '' : r[i]).trim();
+      }
+      if(idx[normHeader('Date Stamp')] == null || idx[normHeader('Trips Counter')] == null){
+        toast('Not a Dispatch Manifest export — missing Date Stamp / Trips Counter', true);
+        return;
+      }
+
+      var groups = {}, order = [];
+      rows.slice(1).forEach(function(r){
+        if(!r || !r.length) return;
+        var key = cell(r, 'Date Stamp') + '|' + cell(r, 'Trips Counter');
+        if(key === '|') return;
+        if(!groups[key]){ groups[key] = []; order.push(key); }
+        groups[key].push(r);
+      });
+
+      var existing = {};
+      trips.forEach(function(t){ existing[t.dateStamp + '|' + t.tripCounter] = true; });
+
+      var made = [], skipped = 0;
+      order.forEach(function(key){
+        if(existing[key]){ skipped++; return; }
+        var rs = groups[key], head = rs[0];
+        var pallets = rs.map(function(r){
+          var manifests = [];
+          for(var g = 1; g <= C.DM_GROUPS; g++){
+            var merged = [];
+            for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
+              merged.push(cell(r, 'DM' + g + ' Merged Pallet Manifest ' + i));
+            }
+            manifests.push({
+              truck: cell(r, 'DM' + g + ' Truck Manifest ' + g),
+              master: cell(r, 'DM' + g + ' Master Pallet Manifest'),
+              merged: merged
+            });
+          }
+          return { sequence: Number(cell(r, 'Physical Pallet Sequence')) || C.SEQ_MIN,
+                   manifests: manifests };
+        });
+        var dateStamp = cell(head, 'Date Stamp');
+        made.push({
+          id: APP.uid(),
+          dateStamp: dateStamp,
+          dateDisplay: APP.formatStamp(dateStamp),
+          tripCounter: Number(cell(head, 'Trips Counter')) || 1,
+          vehicleKey: cell(head, 'Truck ID') || cell(head, 'Vehicle No.'),
+          vehicleNumber: cell(head, 'Vehicle No.'),
+          truckId: cell(head, 'Truck ID'),
+          vehicle: {
+            truckId: cell(head, 'Truck ID'), vehicleNo: cell(head, 'Vehicle No.'),
+            vehicleType: cell(head, 'Vehicle Type'), chassis: cell(head, 'Chassis Number'),
+            maker: cell(head, 'Maker'), model: cell(head, 'Model'),
+            palletsCount: cell(head, 'Considered Pallets Count'),
+            tonnage: cell(head, 'Considered Tonnage')
+          },
+          vehicleTripToday: cell(head, 'Vehicle Trip of Today'),
+          palletCount: cell(head, 'Physical Pallet Count'),
+          bayNo: cell(head, 'Bay No.'),
+          otlSeal: cell(head, 'OTL (Seal No.)'),
+          branchCode: cell(head, 'To Branch Code'),
+          branch: cell(head, 'To Branch Code') ? {
+            code: cell(head, 'To Branch Code'), name: cell(head, 'To Branch Name'),
+            coords: cell(head, 'Branch Location Coordination'),
+            link: cell(head, 'Branch Location Link')
+          } : null,
+          pallets: pallets,
+          driverName: cell(head, 'Driver Name'),
+          driverEmpId: cell(head, 'Driver Employee ID'),
+          driverSignature: '',
+          dcEmpId: cell(head, 'DC Employee ID'),
+          dcEmpName: cell(head, 'DC Employee Name'),
+          dcSignature: '',
+          dispatchAt: cell(head, 'Dispatch Date & Time'),
+          dispatchAuto: false,
+          savedAt: new Date().toISOString()
+        });
+      });
+
+      if(!made.length){
+        toast(skipped ? 'All ' + skipped + ' trips already on this device' : 'Nothing to import', true);
+        return;
+      }
+      var chain = Promise.resolve();
+      made.forEach(function(t){ chain = chain.then(function(){ return DB.putTrip(t); }); });
+      return chain.then(reloadTrips).then(function(){
+        toast(made.length + ' trip' + (made.length === 1 ? '' : 's') + ' imported'
+              + (skipped ? ', ' + skipped + ' already present' : '')
+              + ' · signatures are not carried in a sheet');
+      });
+    });
+  }).catch(function(e){ toast('Import failed: ' + e.message, true); });
 }
 
 function exportJson(){
@@ -3451,7 +3728,7 @@ function importJson(){
       fresh.forEach(function(t){ chain = chain.then(function(){ return DB.putTrip(t); }); });
 
       if(data.lists){
-        ['vehicles', 'drivers', 'dc'].forEach(function(w){
+        ['vehicles', 'drivers', 'dc', 'branches'].forEach(function(w){
           if(Array.isArray(data.lists[w]) && data.lists[w].length){
             chain = chain.then(function(){ return Lists.mergeInto(w, data.lists[w], 'keep'); });
           }
@@ -3491,8 +3768,9 @@ function init(){
     b.addEventListener('click', function(){ showScreen(b.getAttribute('data-nav')); });
   });
   $('recordSearch').addEventListener('input', renderRecords);
-  $('expCsv').addEventListener('click', exportCsvTrips);
-  $('expXlsx').addEventListener('click', exportXlsxTrips);
+  $('expCsv').addEventListener('click', function(){ exportTrips('csv'); });
+  $('expXlsx').addEventListener('click', function(){ exportTrips('xlsx'); });
+  $('impTable').addEventListener('click', importTripsTable);
   $('expJson').addEventListener('click', exportJson);
   $('impJson').addEventListener('click', importJson);
   $('clearTrips').addEventListener('click', function(){
