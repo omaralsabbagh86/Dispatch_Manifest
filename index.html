@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V7</title>
+<title>Dispatch Manifest V8</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -442,7 +442,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V7</h1>
+  <h1>Dispatch Manifest V8</h1>
 </div>
 
 <div class="screens">
@@ -670,7 +670,7 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-qr="vehicles">Share as QR</button>
           <button class="btn small" data-list-csv="vehicles">Export CSV</button>
           <button class="btn small" data-list-xlsx="vehicles">Export XLSX</button>
-          <button class="btn small" data-list-imp="vehicles">Import file</button>
+          <button class="btn small" data-list-imp="vehicles">Import CSV/XLSX</button>
           <button class="btn small danger" data-list-clear="vehicles">Clear</button>
         </div>
         <div class="chip-list" id="listVehChips" style="max-height:none;"></div>
@@ -689,7 +689,7 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-qr="drivers">Share as QR</button>
           <button class="btn small" data-list-csv="drivers">Export CSV</button>
           <button class="btn small" data-list-xlsx="drivers">Export XLSX</button>
-          <button class="btn small" data-list-imp="drivers">Import file</button>
+          <button class="btn small" data-list-imp="drivers">Import CSV/XLSX</button>
           <button class="btn small danger" data-list-clear="drivers">Clear</button>
         </div>
         <div class="chip-list" id="listDrvChips" style="max-height:none;"></div>
@@ -708,7 +708,7 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-qr="branches">Share as QR</button>
           <button class="btn small" data-list-csv="branches">Export CSV</button>
           <button class="btn small" data-list-xlsx="branches">Export XLSX</button>
-          <button class="btn small" data-list-imp="branches">Import file</button>
+          <button class="btn small" data-list-imp="branches">Import CSV/XLSX</button>
           <button class="btn small danger" data-list-clear="branches">Clear</button>
         </div>
         <div class="chip-list" id="listBrnChips" style="max-height:none;"></div>
@@ -727,7 +727,7 @@ select:disabled,option:disabled{color:#5B646C;}
           <button class="btn small" data-list-qr="dc">Share as QR</button>
           <button class="btn small" data-list-csv="dc">Export CSV</button>
           <button class="btn small" data-list-xlsx="dc">Export XLSX</button>
-          <button class="btn small" data-list-imp="dc">Import file</button>
+          <button class="btn small" data-list-imp="dc">Import CSV/XLSX</button>
           <button class="btn small danger" data-list-clear="dc">Clear</button>
         </div>
         <div class="chip-list" id="listDcChips" style="max-height:none;"></div>
@@ -773,11 +773,11 @@ select:disabled,option:disabled{color:#5B646C;}
     <div class="section-label">Restore</div>
     <div class="export-tile">
       <div class="info"><div class="fmt">Import backup</div><div class="desc">Merges a JSON backup into this device</div></div>
-      <button class="btn small" id="impJson">Choose file</button>
+      <button class="btn small" id="impJson">Import JSON</button>
     </div>
     <div class="export-tile">
-      <div class="info"><div class="fmt">Import trips</div><div class="desc">From a CSV or XLSX exported above</div></div>
-      <button class="btn small" id="impTable">Choose file</button>
+      <div class="info"><div class="fmt">Import trips</div><div class="desc">Reads a .csv or .xlsx exported above</div></div>
+      <button class="btn small" id="impTable">Import CSV/XLSX</button>
     </div>
 
     <div class="section-label">Danger Zone</div>
@@ -2147,7 +2147,7 @@ Lists.exportTable = exportTable;
 
 function importTable(which){
   var sc = SCHEMAS[which];
-  APP.pickFile('.csv,.xlsx,.xlsm').then(function(file){
+  APP.pickFile('.csv,.xlsx,.xlsm,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').then(function(file){
     if(!file) return;
     return APP.readTable(file).then(function(rows){
       if(rows.length < 2){ toast('That file has no data rows', true); return; }
@@ -3592,7 +3592,7 @@ function normHeader(h){
 }
 
 function importTripsTable(){
-  APP.pickFile('.csv,.xlsx,.xlsm').then(function(file){
+  APP.pickFile('.csv,.xlsx,.xlsm,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').then(function(file){
     if(!file) return;
     return APP.readTable(file).then(function(rows){
       if(!rows || rows.length < 2){ toast('That file has no data rows', true); return; }
