@@ -1,6 +1,6 @@
 {
-  "name": "Dispatch Manifest V4 \u2014 Offline Dispatch Report",
-  "short_name": "Dispatch Manifest V4",
+  "name": "Dispatch Manifest V5 \u2014 Offline Dispatch Report",
+  "short_name": "Dispatch Manifest V5",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#12161A",

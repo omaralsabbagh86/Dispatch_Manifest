@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V4</title>
+<title>Dispatch Manifest V5</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -423,13 +423,26 @@ select:disabled,option:disabled{color:#5B646C;}
 }
 .editing-banner.hidden{display:none !important;}
 
+/* ---------- Physical Pallet Sequence container ---------- */
+.pallet-space{
+  border:1px solid var(--amber-dim);border-radius:11px;padding:12px;
+  background:rgba(242,169,59,.035);margin-bottom:14px;
+}
+.pallet-space .section-label{margin-top:0;}
+.pallet-actions{display:flex;gap:8px;margin:12px 0 4px;}
+.pallet-actions .btn{flex:1;}
+.chip.pallet{cursor:pointer;}
+.chip.pallet .n{color:var(--amber);font-weight:600;}
+.chip.pallet.active{border-color:var(--amber);background:rgba(242,169,59,.12);}
+#palletTally{font-family:var(--mono);font-size:10px;color:var(--text-mid);letter-spacing:.06em;}
+
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V4</h1>
+  <h1>Dispatch Manifest V5</h1>
 </div>
 
 <div class="screens">
@@ -488,15 +501,44 @@ select:disabled,option:disabled{color:#5B646C;}
         <label for="palletCount">Physical Pallet Count</label>
         <select id="palletCount"></select>
       </div>
-      <div class="field full">
-        <label for="palletSequence">Physical Pallet Sequence</label>
-        <select id="palletSequence"></select>
-        <div class="seq-note" id="palletSeqNote">Select a vehicle to apply used-sequence locking.</div>
+      <div class="field">
+        <label for="bayNo">Bay No.</label>
+        <div class="scanfield">
+          <input id="bayNo" type="text" autocomplete="off" placeholder="Type or scan">
+          <button class="iconbtn" id="bayNoScan" title="Scan Bay No."></button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="otlSeal">OTL (Seal No.)</label>
+        <div class="scanfield">
+          <input id="otlSeal" type="text" autocomplete="off" placeholder="Type or scan">
+          <button class="iconbtn" id="otlSealScan" title="Scan OTL seal number"></button>
+        </div>
       </div>
     </div>
 
-    <div class="section-label">Delivery Manifests <span class="count" id="manifestSummary"></span></div>
-    <div id="manifestHost"></div>
+    <!-- ===== Physical Pallet Sequence owns the delivery manifests ===== -->
+    <div class="pallet-space">
+      <div class="pallet-head">
+        <div class="field full" style="margin-bottom:0;">
+          <label for="palletSequence">Physical Pallet Sequence</label>
+          <select id="palletSequence"></select>
+          <div class="seq-note" id="palletSeqNote">Select a vehicle to apply used-sequence locking.</div>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top:14px;">Delivery Manifests
+        <span class="count" id="manifestSummary"></span></div>
+      <div id="manifestHost"></div>
+
+      <div class="pallet-actions">
+        <button class="btn primary" id="savePalletBtn">Save pallet</button>
+        <button class="btn ghost" id="clearPalletBtn">Clear pallet fields</button>
+      </div>
+
+      <div class="subhead">Pallets captured for this trip <span id="palletTally"></span></div>
+      <div class="chip-list" id="palletChips" style="max-height:none;"></div>
+    </div>
 
     <div class="section-label">Handover</div>
 
@@ -805,18 +847,19 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
 var APP = window.APP = {};
 
 /* ---------------- constants ---------------- */
-var DM_GROUPS = 5;              // Delivery Manifest 1..5
+var DM_GROUPS = 9;              // Delivery Manifest 1..9
 var MERGED_PER_GROUP = 11;      // Merged Pallet Manifest 1..11
 var MERGED_ALWAYS_VISIBLE = 2;  // MPM 1 and 2 always shown
-var SEQ_MAX = 40;               // Physical Pallet Sequence 0..40
+var SEQ_MIN = 1;                // Physical Pallet Sequence starts at 1
+var SEQ_MAX = 40;               // Physical Pallet Sequence 1..40
 var TRIP_TODAY_MAX = 9;         // Vehicle Trip of Today 0..9
-var PALLET_COUNT_MAX = 5;       // Physical Pallet Count 0..5
+var PALLET_COUNT_MAX = 40;      // Physical Pallet Count 0..40
 var QR_CHUNK = 700;             // characters of payload per QR code
 
 APP.C = {
   DM_GROUPS: DM_GROUPS, MERGED_PER_GROUP: MERGED_PER_GROUP,
   MERGED_ALWAYS_VISIBLE: MERGED_ALWAYS_VISIBLE,
-  SEQ_MAX: SEQ_MAX, TRIP_TODAY_MAX: TRIP_TODAY_MAX,
+  SEQ_MIN: SEQ_MIN, SEQ_MAX: SEQ_MAX, TRIP_TODAY_MAX: TRIP_TODAY_MAX,
   PALLET_COUNT_MAX: PALLET_COUNT_MAX, QR_CHUNK: QR_CHUNK
 };
 
@@ -1942,6 +1985,7 @@ var signatureData = null;
 var empSignatureData = null;
 var editingId = null;
 var currentCounter = 1;
+var pallets = [];   /* {sequence, manifests:[...]} for the trip being built */
 
 /* ---------------- scan icon ---------------- */
 function scanIcon(){
@@ -1995,6 +2039,25 @@ function makeScanField(id, label){
   row.appendChild(btn);
   fld.appendChild(row);
   return fld;
+}
+
+/* Bay No. and the OTL seal can be alphanumeric, so these keep whatever
+   the label carries rather than stripping to digits. */
+function wirePlainScan(inputId, btnId, label){
+  var btn = $(btnId);
+  btn.innerHTML = scanIcon();
+  btn.addEventListener('click', function(){
+    APP.openScanner({
+      title: label, mode: 'any', hint: 'Scan a Code 128 or QR code',
+      onHit: function(text){
+        var v = String(text || '').trim();
+        if(!v){ APP.setScanMsg('That code is empty', 'err'); return false; }
+        $(inputId).value = v;
+        toast(label + ' captured');
+        return true;
+      }
+    });
+  });
 }
 
 /* ---------------- manifest field ids ---------------- */
@@ -2067,6 +2130,7 @@ function refreshManifestBadges(){
   }
   var s = $('manifestSummary');
   if(s) s.textContent = grand + ' filled';
+  return grand;
 }
 
 /* ---------------- simple numeric selects ---------------- */
@@ -2158,17 +2222,22 @@ function loadTrip(rec){
   setSelectValue($('vehicleTripToday'), rec.vehicleTripToday);
   setSelectValue($('palletCount'), rec.palletCount);
 
-  refreshSequence(rec.palletSequence);
+  $('bayNo').value = rec.bayNo || '';
+  $('otlSeal').value = rec.otlSeal || '';
 
-  for(var g = 1; g <= C.DM_GROUPS; g++){
-    var m = (rec.manifests || [])[g - 1] || { merged: [] };
-    $('m' + g + '_truck').value = m.truck || '';
-    $('m' + g + '_master').value = m.master || '';
-    for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
-      $('m' + g + '_mp' + i).value = (m.merged || [])[i - 1] || '';
-    }
-  }
-  refreshManifestBadges();
+  /* Records written before pallets existed carry a single manifest set. */
+  pallets = (rec.pallets && rec.pallets.length)
+    ? rec.pallets.map(function(p){
+        return { sequence: Number(p.sequence), manifests: p.manifests };
+      })
+    : (rec.manifests ? [{ sequence: Number(rec.palletSequence) || C.SEQ_MIN,
+                          manifests: rec.manifests }] : []);
+
+  var first = pallets.length ? pallets[0].sequence : C.SEQ_MIN;
+  refreshSequence(String(first));
+  $('palletSequence').value = String(first);
+  loadPallet(first);
+  renderPalletChips();
 
   setSelectValue($('driverNameSelect'), rec.driverEmpId || '');
   setSelectValue($('driverIdSelect'), rec.driverEmpId || '');
@@ -2188,12 +2257,16 @@ function loadTrip(rec){
 function startNewTrip(counter){
   editingId = null;
   currentCounter = counter;
+  pallets = [];
+  $('bayNo').value = '';
+  $('otlSeal').value = '';
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
   renderSignaturePreview();
   $('dispatchAt').value = '';
   refreshSequence();
+  renderPalletChips();
   setEditingChrome();
 }
 
@@ -2215,8 +2288,10 @@ function refreshSequence(forceValue){
       /* A trip being re-opened must not lock itself out. */
       if(editingId && t.id === editingId) return;
       if(t.dateStamp === iso && (t.vehicleKey || t.vehicleNumber) === veh){
-        var s = Number(t.palletSequence);
-        if(!isNaN(s) && s > maxUsed) maxUsed = s;
+        var seqs = (t.pallets && t.pallets.length)
+          ? t.pallets.map(function(p){ return Number(p.sequence); })
+          : [Number(t.palletSequence)];
+        seqs.forEach(function(n){ if(!isNaN(n) && n > maxUsed) maxUsed = n; });
       }
     });
   }
@@ -2224,15 +2299,17 @@ function refreshSequence(forceValue){
   var previous = sel.value;
   sel.innerHTML = '';
   var firstEnabled = null;
-  for(var i = 0; i <= C.SEQ_MAX; i++){
+  for(var i = C.SEQ_MIN; i <= C.SEQ_MAX; i++){
     var o = document.createElement('option');
     o.value = String(i);
     o.textContent = String(i);
+    var inTrip = pallets.some(function(p){ return Number(p.sequence) === i; });
     if(i <= maxUsed && String(i) !== String(forceValue)){
       o.disabled = true;
       o.textContent = i + ' — used';
-    } else if(firstEnabled === null){
-      firstEnabled = i;
+    } else {
+      if(inTrip) o.textContent = i + ' — captured';
+      if(firstEnabled === null && !inTrip) firstEnabled = i;
     }
     sel.appendChild(o);
   }
@@ -2246,13 +2323,13 @@ function refreshSequence(forceValue){
   if(!veh){
     note.textContent = 'Select a vehicle to apply used-sequence locking.';
   } else if(maxUsed < 0){
-    note.textContent = 'No sequence used yet for this vehicle on this date — 0 to '
-      + C.SEQ_MAX + ' available.';
+    note.textContent = 'No sequence used yet for this vehicle on this date — '
+      + C.SEQ_MIN + ' to ' + C.SEQ_MAX + ' available.';
   } else if(firstEnabled === null){
     note.textContent = 'Sequence ' + C.SEQ_MAX + ' is already used for this vehicle and date.';
   } else {
-    note.textContent = 'Locked 0–' + maxUsed + ' (already used for this vehicle and date). '
-      + 'Next available is ' + firstEnabled + '.';
+    note.textContent = 'Locked ' + C.SEQ_MIN + '–' + maxUsed
+      + ' (already used for this vehicle and date). Next available is ' + firstEnabled + '.';
   }
 }
 
@@ -2370,6 +2447,174 @@ function onDcChange(source){
   Lists.renderDetails('dc', $('dcDetails'), v);
   Lists.renderChips('dc', $('dcChips'), v);
 }
+
+
+/* ============================================================
+   Pallets — a trip holds many, each with its own nine manifests
+   ============================================================ */
+
+function readManifestFields(){
+  var out = [];
+  for(var g = 1; g <= C.DM_GROUPS; g++){
+    var merged = [];
+    for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
+      merged.push($('m' + g + '_mp' + i).value.trim());
+    }
+    out.push({
+      truck: $('m' + g + '_truck').value.trim(),
+      master: $('m' + g + '_master').value.trim(),
+      merged: merged
+    });
+  }
+  return out;
+}
+
+function writeManifestFields(manifests){
+  for(var g = 1; g <= C.DM_GROUPS; g++){
+    var m = (manifests || [])[g - 1] || { merged: [] };
+    $('m' + g + '_truck').value = m.truck || '';
+    $('m' + g + '_master').value = m.master || '';
+    for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
+      $('m' + g + '_mp' + i).value = (m.merged || [])[i - 1] || '';
+    }
+  }
+  refreshManifestBadges();
+}
+
+function countFilled(manifests){
+  var n = 0;
+  (manifests || []).forEach(function(m){
+    if(m.truck) n++;
+    if(m.master) n++;
+    (m.merged || []).forEach(function(v){ if(v) n++; });
+  });
+  return n;
+}
+
+function fieldsHaveData(){ return countFilled(readManifestFields()) > 0; }
+
+function getPallet(seq){
+  return pallets.filter(function(p){ return Number(p.sequence) === Number(seq); })[0] || null;
+}
+
+/* Selecting a sequence shows that pallet's numbers, or a blank set. */
+function loadPallet(seq){
+  var existing = getPallet(seq);
+  writeManifestFields(existing ? existing.manifests : null);
+  renderPalletChips();
+}
+
+/* Save pallet: store this sequence, blank the fields, step to the next number. */
+function savePallet(){
+  var seq = Number($('palletSequence').value);
+  if(!seq){ toast('Select a pallet sequence first', true); return; }
+  var opt = $('palletSequence').options[$('palletSequence').selectedIndex];
+  if(opt && opt.disabled){ toast('That sequence is already used', true); return; }
+
+  var manifests = readManifestFields();
+  if(countFilled(manifests) === 0){
+    toast('Nothing to save — enter at least one manifest number', true);
+    return;
+  }
+
+  var existing = getPallet(seq);
+  if(existing) existing.manifests = manifests;
+  else pallets.push({ sequence: seq, manifests: manifests });
+  pallets.sort(function(a, b){ return a.sequence - b.sequence; });
+
+  toast('Pallet ' + seq + ' saved · ' + countFilled(manifests) + ' numbers');
+  APP.flash();
+
+  /* Advance to the next sequence that is neither locked nor already captured. */
+  writeManifestFields(null);
+  refreshSequence();
+  var next = nextFreeSequence(seq + 1);
+  if(next != null){
+    $('palletSequence').value = String(next);
+  } else {
+    toast('No further sequence available', true);
+  }
+  loadPallet($('palletSequence').value);
+  renderPalletChips();
+}
+
+function nextFreeSequence(from){
+  var sel = $('palletSequence');
+  for(var i = 0; i < sel.options.length; i++){
+    var o = sel.options[i];
+    if(o.disabled) continue;
+    var v = Number(o.value);
+    if(v >= from && !getPallet(v)) return v;
+  }
+  return null;
+}
+
+/* Clear the fields for the selected sequence, and drop its stored pallet. */
+function clearPalletPrompt(){
+  var seq = Number($('palletSequence').value);
+  var existing = getPallet(seq);
+  if(!existing && !fieldsHaveData()){
+    toast('Nothing to clear');
+    return;
+  }
+  if(!existing){
+    writeManifestFields(null);
+    toast('Fields cleared');
+    return;
+  }
+  APP.confirmModal('Clear pallet ' + seq,
+    'Clear the fields and remove pallet ' + seq + ' from this trip?',
+    'Clear').then(function(ok){
+    if(!ok) return;
+    pallets = pallets.filter(function(p){ return Number(p.sequence) !== seq; });
+    writeManifestFields(null);
+    refreshSequence(String(seq));
+    renderPalletChips();
+    toast('Pallet ' + seq + ' cleared');
+  });
+}
+
+function renderPalletChips(){
+  var host = $('palletChips');
+  host.innerHTML = '';
+  var declared = Number($('palletCount').value);
+  $('palletTally').textContent = '(' + pallets.length
+    + (declared ? ' of ' + declared + ' declared' : '') + ')';
+
+  if(!pallets.length){
+    host.appendChild(el('div', 'detail-empty',
+      'No pallets captured yet. Fill the manifests and tap Save pallet.'));
+    return;
+  }
+  var current = Number($('palletSequence').value);
+  pallets.forEach(function(p){
+    var chip = el('span', 'chip pallet' + (Number(p.sequence) === current ? ' active' : ''));
+    var n = el('span', 'n', 'Pallet ' + p.sequence);
+    chip.appendChild(n);
+    chip.appendChild(document.createTextNode(' · ' + countFilled(p.manifests) + ' no.'));
+    chip.addEventListener('click', function(){
+      refreshSequence(String(p.sequence));
+      $('palletSequence').value = String(p.sequence);
+      loadPallet(p.sequence);
+    });
+    var x = el('span', 'x', '\u00D7');
+    x.title = 'Remove pallet';
+    x.addEventListener('click', function(ev){
+      ev.stopPropagation();
+      APP.confirmModal('Remove pallet ' + p.sequence,
+        'Remove pallet ' + p.sequence + ' from this trip?', 'Remove').then(function(ok){
+        if(!ok) return;
+        pallets = pallets.filter(function(q){ return q.sequence !== p.sequence; });
+        refreshSequence();
+        renderPalletChips();
+        toast('Pallet ' + p.sequence + ' removed');
+      });
+    });
+    chip.appendChild(x);
+    host.appendChild(chip);
+  });
+}
+APP.renderPalletChips = renderPalletChips;
 
 /* ---------------- signature ---------------- */
 var sigCtx = null, sigDrawing = false, sigDirty = false, sigLast = null;
@@ -2490,19 +2735,6 @@ function collectTrip(){
   var iso = $('dateStamp').value;
   var veh = $('vehicleSelect').value;
 
-  var manifests = [];
-  for(var g = 1; g <= C.DM_GROUPS; g++){
-    var merged = [];
-    for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
-      merged.push($('m' + g + '_mp' + i).value.trim());
-    }
-    manifests.push({
-      truck: $('m' + g + '_truck').value.trim(),
-      master: $('m' + g + '_master').value.trim(),
-      merged: merged
-    });
-  }
-
   var dispatch = $('dispatchAt').value;
   var dispatchAuto = false;
   if(!dispatch){ dispatch = APP.nowLocalInput(); dispatchAuto = true; }
@@ -2524,8 +2756,11 @@ function collectTrip(){
     vehicle: vehRec ? Object.assign({}, vehRec) : null,
     vehicleTripToday: $('vehicleTripToday').value,
     palletCount: $('palletCount').value,
-    palletSequence: $('palletSequence').value,
-    manifests: manifests,
+    bayNo: $('bayNo').value.trim(),
+    otlSeal: $('otlSeal').value.trim(),
+    pallets: pallets.map(function(p){
+      return { sequence: p.sequence, manifests: p.manifests };
+    }),
     driverName: drvRec ? drvRec.name : '',
     driverEmpId: drvRec ? drvRec.empId : '',
     driverSignature: signatureData || '',
@@ -2546,9 +2781,23 @@ function saveTrip(){
     $('vehiclePanel').classList.add('open');
     return;
   }
-  var seqSel = $('palletSequence');
-  if(!seqSel.value || seqSel.options[seqSel.selectedIndex].disabled){
-    toast('Pick an available pallet sequence', true);
+  /* Don't let unsaved on-screen manifest numbers disappear at save time. */
+  var staged = 0;
+  if(fieldsHaveData()){
+    var seq = Number($('palletSequence').value);
+    var opt = $('palletSequence').options[$('palletSequence').selectedIndex];
+    if(!seq || (opt && opt.disabled)){
+      toast('Pick an available pallet sequence for the numbers on screen', true);
+      return;
+    }
+    var ex = getPallet(seq);
+    if(ex) ex.manifests = readManifestFields();
+    else pallets.push({ sequence: seq, manifests: readManifestFields() });
+    pallets.sort(function(a, b){ return a.sequence - b.sequence; });
+    staged = seq;
+  }
+  if(!pallets.length){
+    toast('Save at least one pallet before saving the trip', true);
     return;
   }
 
@@ -2560,6 +2809,8 @@ function saveTrip(){
     return APP.reloadTrips();
   }).then(function(){
     toast('Trip ' + rec.tripCounter + (wasEditing ? ' updated' : ' saved')
+      + ' · ' + rec.pallets.length + ' pallet' + (rec.pallets.length === 1 ? '' : 's')
+      + (staged ? ' (pallet ' + staged + ' included)' : '')
       + (rec.dispatchAuto ? ' · dispatch time stamped' : ''));
     APP.flash();
     if(wasEditing){
@@ -2587,6 +2838,9 @@ function clearManifestFields(){
 /* After a save, keep the crew and vehicle, clear the load-specific data. */
 function clearAfterSave(){
   editingId = null;
+  pallets = [];
+  $('bayNo').value = '';
+  $('otlSeal').value = '';
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
@@ -2594,6 +2848,7 @@ function clearAfterSave(){
   $('dispatchAt').value = '';
   refreshTripCounter();
   refreshSequence();
+  renderPalletChips();
   setEditingChrome();
 }
 
@@ -2603,6 +2858,9 @@ function resetForm(){
     'Reset').then(function(ok){
     if(!ok) return;
     editingId = null;
+    pallets = [];
+    $('bayNo').value = '';
+    $('otlSeal').value = '';
     clearManifestFields();
     signatureData = null;
     empSignatureData = null;
@@ -2619,6 +2877,7 @@ function resetForm(){
     onVehicleChange();
     onDriverChange();
     onDcChange();
+    renderPalletChips();
     setEditingChrome();
     toast('Form reset');
   });
@@ -2659,10 +2918,17 @@ Trip.init = function(trips){
     });
   });
   $('vehicleSelect').addEventListener('change', function(){ onVehicleChange(); });
+  $('palletSequence').addEventListener('change', function(){ loadPallet($('palletSequence').value); });
+  $('savePalletBtn').addEventListener('click', savePallet);
+  $('clearPalletBtn').addEventListener('click', clearPalletPrompt);
   $('driverNameSelect').addEventListener('change', function(){ onDriverChange('name'); });
   $('driverIdSelect').addEventListener('change', function(){ onDriverChange('id'); });
   $('dcIdSelect').addEventListener('change', function(){ onDcChange('id'); });
   $('dcNameSelect').addEventListener('change', function(){ onDcChange('name'); });
+
+  wirePlainScan('bayNo', 'bayNoScan', 'Bay No.');
+  wirePlainScan('otlSeal', 'otlSealScan', 'OTL (Seal No.)');
+  $('palletCount').addEventListener('change', renderPalletChips);
 
   $('dispatchNowBtn').addEventListener('click', function(){
     $('dispatchAt').value = APP.nowLocalInput();
@@ -2757,10 +3023,12 @@ document.addEventListener('click', function(e){
 /* ---------------- records ---------------- */
 function manifestCount(t){
   var n = 0;
-  (t.manifests || []).forEach(function(m){
-    if(m.truck) n++;
-    if(m.master) n++;
-    (m.merged || []).forEach(function(v){ if(v) n++; });
+  tripPallets(t).forEach(function(p){
+    (p.manifests || []).forEach(function(m){
+      if(m.truck) n++;
+      if(m.master) n++;
+      (m.merged || []).forEach(function(v){ if(v) n++; });
+    });
   });
   return n;
 }
@@ -2776,9 +3044,13 @@ function renderRecords(){
     var hay = [t.dateDisplay, t.dateStamp, t.vehicleNumber, t.driverName, t.driverEmpId,
                t.dcEmpName, t.dcEmpId].join(' ').toLowerCase();
     if(hay.indexOf(q) >= 0) return true;
-    return (t.manifests || []).some(function(m){
-      return [m.truck, m.master].concat(m.merged || []).some(function(v){
-        return v && String(v).toLowerCase().indexOf(q) >= 0;
+    if((t.bayNo || '').toLowerCase().indexOf(q) >= 0) return true;
+    if((t.otlSeal || '').toLowerCase().indexOf(q) >= 0) return true;
+    return tripPallets(t).some(function(p){
+      return (p.manifests || []).some(function(m){
+        return [m.truck, m.master].concat(m.merged || []).some(function(v){
+          return v && String(v).toLowerCase().indexOf(q) >= 0;
+        });
       });
     });
   });
@@ -2798,10 +3070,11 @@ function renderRecords(){
     var main = el('div', 'record-main');
     main.appendChild(el('div', 'code', t.dateDisplay + '  ·  Trip ' + t.tripCounter));
     var meta = el('div', 'meta');
+    var ps = tripPallets(t);
     meta.textContent = (t.vehicleNumber || 'no vehicle')
-      + ' · seq ' + t.palletSequence
-      + ' · ' + t.palletCount + ' pallet' + (String(t.palletCount) === '1' ? '' : 's')
+      + ' · ' + ps.length + ' pallet' + (ps.length === 1 ? '' : 's')
       + ' · ' + manifestCount(t) + ' manifest no.'
+      + (t.bayNo ? ' · bay ' + t.bayNo : '')
       + (t.driverName ? ' · ' + t.driverName : '');
     main.appendChild(meta);
     card.appendChild(main);
@@ -2835,28 +3108,38 @@ function openRecord(t){
   }
   add('Vehicle trip of today', t.vehicleTripToday);
   add('Physical pallet count', t.palletCount);
-  add('Physical pallet sequence', t.palletSequence);
+  add('Bay No.', t.bayNo);
+  add('OTL (Seal No.)', t.otlSeal);
+  add('Pallets captured', tripPallets(t).length);
   add('Driver', t.driverName ? t.driverName + ' · ' + t.driverEmpId : '');
   add('DC employee', t.dcEmpName ? t.dcEmpName + ' · ' + t.dcEmpId : '');
   add('Dispatch date & time', formatDispatch(t.dispatchAt)
       + (t.dispatchAuto ? ' (auto)' : ''));
   wrap.appendChild(dl);
 
-  (t.manifests || []).forEach(function(m, i){
-    var vals = [];
-    if(m.truck) vals.push(['Truck Manifest ' + (i + 1), m.truck]);
-    if(m.master) vals.push(['Master Pallet Manifest', m.master]);
-    (m.merged || []).forEach(function(v, j){
-      if(v) vals.push(['Merged Pallet Manifest ' + (j + 1), v]);
+  tripPallets(t).forEach(function(pallet){
+    var any = false;
+    (pallet.manifests || []).forEach(function(m, i){
+      var vals = [];
+      if(m.truck) vals.push(['Truck Manifest ' + (i + 1), m.truck]);
+      if(m.master) vals.push(['Master Pallet Manifest', m.master]);
+      (m.merged || []).forEach(function(v, j){
+        if(v) vals.push(['Merged Pallet Manifest ' + (j + 1), v]);
+      });
+      if(!vals.length) return;
+      if(!any){
+        wrap.appendChild(el('div', 'subhead',
+          '\u25A0 Pallet sequence ' + pallet.sequence));
+        any = true;
+      }
+      wrap.appendChild(el('div', 'subhead', 'Delivery Manifest ' + (i + 1)));
+      var d2 = el('dl', 'detail-grid');
+      vals.forEach(function(p){
+        d2.appendChild(el('dt', null, p[0]));
+        d2.appendChild(el('dd', null, p[1]));
+      });
+      wrap.appendChild(d2);
     });
-    if(!vals.length) return;
-    wrap.appendChild(el('div', 'subhead', 'Delivery Manifest ' + (i + 1)));
-    var d2 = el('dl', 'detail-grid');
-    vals.forEach(function(p){
-      d2.appendChild(el('dt', null, p[0]));
-      d2.appendChild(el('dd', null, p[1]));
-    });
-    wrap.appendChild(d2);
   });
 
   function sigBlock(label, data){
@@ -2926,7 +3209,8 @@ function exportColumns(){
   var cols = ['Date Stamp', 'Date', 'Trips Counter', 'Truck ID', 'Vehicle No.',
               'Vehicle Type', 'Chassis Number', 'Maker', 'Model',
               'Considered Pallets Count', 'Considered Tonnage',
-              'Vehicle Trip of Today', 'Physical Pallet Count', 'Physical Pallet Sequence'];
+              'Vehicle Trip of Today', 'Physical Pallet Count',
+              'Bay No.', 'OTL (Seal No.)', 'Physical Pallet Sequence'];
   for(var g = 1; g <= C.DM_GROUPS; g++){
     cols.push('DM' + g + ' Truck Manifest ' + g);
     cols.push('DM' + g + ' Master Pallet Manifest');
@@ -2940,15 +3224,24 @@ function exportColumns(){
   return cols;
 }
 
-function tripRow(t){
+/* A trip holds many pallets, so the sheet gets one row per pallet with the
+   trip header repeated — that keeps every manifest number on its own line. */
+function tripPallets(t){
+  if(t.pallets && t.pallets.length) return t.pallets;
+  if(t.manifests) return [{ sequence: t.palletSequence, manifests: t.manifests }];
+  return [{ sequence: '', manifests: [] }];
+}
+
+function tripRow(t, pallet){
   var v = t.vehicle || {};
   var row = [t.dateStamp, t.dateDisplay, t.tripCounter,
              v.truckId || t.truckId || '', t.vehicleNumber || v.vehicleNo || '',
              v.vehicleType || '', v.chassis || '', v.maker || '', v.model || '',
              v.palletsCount || '', v.tonnage || '',
-             t.vehicleTripToday, t.palletCount, t.palletSequence];
+             t.vehicleTripToday, t.palletCount,
+             t.bayNo || '', t.otlSeal || '', pallet.sequence];
   for(var g = 0; g < C.DM_GROUPS; g++){
-    var m = (t.manifests || [])[g] || { merged: [] };
+    var m = (pallet.manifests || [])[g] || { merged: [] };
     row.push(m.truck || '');
     row.push(m.master || '');
     for(var i = 0; i < C.MERGED_PER_GROUP; i++){
@@ -2968,7 +3261,9 @@ function tripRow(t){
 function exportCsvTrips(){
   if(!trips.length){ toast('No trips to export', true); return; }
   var rows = [exportColumns()];
-  trips.slice().reverse().forEach(function(t){ rows.push(tripRow(t)); });
+  trips.slice().reverse().forEach(function(t){
+    tripPallets(t).forEach(function(p){ rows.push(tripRow(t, p)); });
+  });
   APP.downloadBlob(new Blob(['\uFEFF' + APP.toCsv(rows)], { type: 'text/csv;charset=utf-8' }),
     'dispatch-manifest-' + APP.todayISO() + '.csv');
 }
@@ -2976,7 +3271,9 @@ function exportCsvTrips(){
 function exportXlsxTrips(){
   if(!trips.length){ toast('No trips to export', true); return; }
   var rows = [exportColumns()];
-  trips.slice().reverse().forEach(function(t){ rows.push(tripRow(t)); });
+  trips.slice().reverse().forEach(function(t){
+    tripPallets(t).forEach(function(p){ rows.push(tripRow(t, p)); });
+  });
   var ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = exportColumns().map(function(c){
     return { wch: Math.min(30, Math.max(12, c.length + 2)) };
