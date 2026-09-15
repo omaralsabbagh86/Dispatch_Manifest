@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V5</title>
+<title>Dispatch Manifest V6</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -442,7 +442,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V5</h1>
+  <h1>Dispatch Manifest V6</h1>
 </div>
 
 <div class="screens">
@@ -926,6 +926,53 @@ function flash(){
 }
 APP.flash = flash;
 
+/* ---------------- capture feedback ----------------
+   Audio has to be unlocked by a user gesture, so the context is created when
+   the scanner is opened (a button tap) rather than when a code is found. */
+var audioCtx = null;
+
+function primeAudio(){
+  try {
+    if(!audioCtx){
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if(AC) audioCtx = new AC();
+    }
+    if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  } catch(e){}
+}
+APP.primeAudio = primeAudio;
+
+function beep(){
+  if(!audioCtx) return;
+  try {
+    var t = audioCtx.currentTime;
+    var osc = audioCtx.createOscillator();
+    var gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1046, t);
+    osc.frequency.setValueAtTime(1568, t + 0.075);
+    /* ramps rather than hard starts, so it reads as a scanner chirp not a click */
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.32, t + 0.012);
+    gain.gain.setValueAtTime(0.32, t + 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  } catch(e){}
+}
+
+/* Fires on every captured code: haptic, tone, and a full-screen flash.
+   The flash matters because it is the only one of the three that still works
+   when the phone is on silent and haptics are off. */
+function captureFeedback(){
+  try { if(navigator.vibrate) navigator.vibrate(240); } catch(e){}
+  beep();
+  flash();
+}
+APP.captureFeedback = captureFeedback;
+
 /* ---------------- modal ---------------- */
 /* showModal({title, bodyNodes|bodyHtml, okText, cancelText, onOk}) -> Promise<bool> */
 function showModal(opts){
@@ -1224,6 +1271,52 @@ function decodeCanvas(canvas, reader, hints, oneD){
   return null;
 }
 
+/* Native detector first. On Android/Chrome this is ML Kit — markedly faster and
+   better at angles and distance than JS decoding. Returns null when unavailable
+   so the ZXing loop below can take over. */
+function nativeFormats(mode){
+  return mode === 'qr'
+    ? ['qr_code']
+    : ['code_128', 'qr_code', 'code_39', 'ean_13', 'itf'];
+}
+
+function startNativeLoop(video, mode, onResult, onTick, onUnavailable){
+  if(!('BarcodeDetector' in window)) return null;
+  var det;
+  try { det = new window.BarcodeDetector({ formats: nativeFormats(mode) }); }
+  catch(e){ return null; }
+
+  var stopped = false, frames = 0, failures = 0;
+
+  function frame(){
+    if(stopped) return;
+    if(video.readyState < 2 || video.videoWidth === 0){
+      requestAnimationFrame(frame);
+      return;
+    }
+    det.detect(video).then(function(codes){
+      if(stopped) return;
+      frames++;
+      for(var i = 0; i < codes.length; i++){
+        var v = codes[i].rawValue;
+        if(v){
+          var keepGoing = onResult({ getText: function(){ return v; } });
+          if(!keepGoing) return;
+        }
+      }
+      if(onTick) onTick(frames, video.videoWidth, video.videoHeight);
+      requestAnimationFrame(frame);
+    }).catch(function(){
+      if(stopped) return;
+      /* A detector that keeps throwing is no detector — hand over to ZXing. */
+      if(++failures >= 3){ stopped = true; onUnavailable(); return; }
+      requestAnimationFrame(frame);
+    });
+  }
+  frame();
+  return function(){ stopped = true; };
+}
+
 /* Our own capture loop. The library's continuous scanner caches a capture
    canvas that can be sized before the stream reports its dimensions, and
    then silently never decodes; driving the frames ourselves avoids that. */
@@ -1266,6 +1359,7 @@ function openScanner(opts){
   $('scanZoomRow').classList.add('hidden');
   scanOnHit = opts.onHit;
   scanActive = true;
+  primeAudio();
 
   var oneD = opts.mode !== 'qr';
   var hints = new Map();
@@ -1306,19 +1400,29 @@ function openScanner(opts){
       setupZoom(track);
       var base = opts.hint || 'Point the camera at the code';
       setScanMsg(base, 'live');
-      scanStopLoop = startDecodeLoop(video, hints, oneD, function(result){
+
+      function handleResult(result){
         if(!scanActive) return false;
-        flash();
+        captureFeedback();
         var done = false;
         try { done = scanOnHit ? scanOnHit(result.getText(), result) : true; }
         catch(e){ console.warn(e); }
         if(done){ closeScanner(); return false; }
         return true;
-      }, function(frames, w, h){
+      }
+      function handleTick(frames, w, h){
         if(frames === 1 || frames % 12 === 0){
           setScanMsg(base + '  \u00B7  ' + w + '\u00D7' + h, 'live');
         }
+      }
+      function useZxing(){
+        scanStopLoop = startDecodeLoop(video, hints, oneD, handleResult, handleTick);
+      }
+
+      scanStopLoop = startNativeLoop(video, opts.mode, handleResult, handleTick, function(){
+        if(scanActive) useZxing();
       });
+      if(!scanStopLoop) useZxing();
     })
     .catch(function(e){
       setScanMsg('Camera unavailable \u2014 ' + (e && e.message ? e.message : 'permission denied'), 'err');
@@ -2852,33 +2956,61 @@ function clearAfterSave(){
   setEditingChrome();
 }
 
+/* Put every control back to its default. Used by the Reset button and after
+   deleting all trips, so the form never keeps values belonging to gone data. */
+function resetAll(){
+  editingId = null;
+  currentCounter = 1;
+  pallets = [];
+
+  $('dateStamp').value = APP.todayISO();
+  $('bayNo').value = '';
+  $('otlSeal').value = '';
+  $('vehicleSelect').value = '';
+  $('driverNameSelect').value = '';
+  $('driverIdSelect').value = '';
+  $('dcIdSelect').value = '';
+  $('dcNameSelect').value = '';
+  $('dispatchAt').value = '';
+  $('vehicleTripToday').value = '1';
+  $('palletCount').value = '1';
+  $('recordSearch').value = '';
+
+  clearManifestFields();
+  signatureData = null;
+  empSignatureData = null;
+  renderSignaturePreview();
+
+  /* Collapse the manifest panels back to their default state. */
+  for(var g = 1; g <= C.DM_GROUPS; g++){
+    var panel = $('dmPanel' + g);
+    if(panel) panel.classList.remove('open');
+  }
+  ['vehiclePanel', 'driverPanel', 'dcPanel'].forEach(function(id){
+    var p = $(id);
+    if(p) p.classList.remove('open');
+  });
+
+  refreshDateStamp();
+  refreshTripCounter();
+  onVehicleChange();
+  onDriverChange();
+  onDcChange();
+  /* Forced last: onVehicleChange would otherwise keep the previous number. */
+  refreshSequence(String(C.SEQ_MIN));
+  $('palletSequence').value = String(C.SEQ_MIN);
+  renderPalletChips();
+  setEditingChrome();
+}
+Trip.resetAll = resetAll;
+
 function resetForm(){
   APP.confirmModal('Reset trip form',
-    'Clear every field on this trip, including the signature? Saved trips are not affected.',
+    'Clear every field on this trip, including pallets and signatures? '
+    + 'Saved trips are not affected.',
     'Reset').then(function(ok){
     if(!ok) return;
-    editingId = null;
-    pallets = [];
-    $('bayNo').value = '';
-    $('otlSeal').value = '';
-    clearManifestFields();
-    signatureData = null;
-    empSignatureData = null;
-    renderSignaturePreview();
-    $('dateStamp').value = APP.todayISO();
-    $('vehicleSelect').value = '';
-    $('driverNameSelect').value = ''; $('driverIdSelect').value = '';
-    $('dcIdSelect').value = ''; $('dcNameSelect').value = '';
-    $('dispatchAt').value = '';
-    $('vehicleTripToday').value = '1';
-    $('palletCount').value = '1';
-    refreshDateStamp();
-    refreshTripCounter();
-    onVehicleChange();
-    onDriverChange();
-    onDcChange();
-    renderPalletChips();
-    setEditingChrome();
+    resetAll();
     toast('Form reset');
   });
 }
@@ -3368,7 +3500,12 @@ function init(){
       'Delete all ' + trips.length + ' saved trips? Reference lists are kept.',
       'Delete all').then(function(ok){
       if(!ok) return;
-      DB.clearTrips().then(reloadTrips).then(function(){ toast('All trips deleted'); });
+      DB.clearTrips().then(reloadTrips).then(function(){
+        /* The form may still be showing a trip that no longer exists. */
+        if(Trip.resetAll) Trip.resetAll();
+        showScreen('trip');
+        toast('All trips deleted · form reset');
+      });
     });
   });
 
