@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V3</title>
+<title>Dispatch Manifest V4</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -373,7 +373,7 @@ body{display:flex;flex-direction:column;}
 .scan-overlay .sc-bar .t{font-family:var(--cond);text-transform:uppercase;font-size:15px;
   letter-spacing:.05em;flex:1;}
 .scan-overlay .sc-stage{flex:1 1 auto;position:relative;background:#000;min-height:0;}
-.scan-overlay video{width:100%;height:100%;object-fit:cover;display:block;}
+.scan-overlay video{width:100%;height:100%;object-fit:contain;display:block;background:#000;}
 .scan-overlay .sc-foot{flex:0 0 auto;padding:10px 14px calc(12px + env(safe-area-inset-bottom));
   background:var(--surface);border-top:1px solid var(--border);}
 .sc-msg{font-family:var(--mono);font-size:11.5px;color:var(--text-mid);letter-spacing:.06em;
@@ -429,7 +429,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V3</h1>
+  <h1>Dispatch Manifest V4</h1>
 </div>
 
 <div class="screens">
@@ -1122,12 +1122,13 @@ APP.parseQrPart = parseQrPart;
 /* ============================================================
    Camera scanner — one shared overlay
    ============================================================ */
-var scanReader = null, scanStream = null, scanActive = false, scanOnHit = null;
+var scanStream = null, scanActive = false, scanOnHit = null;
+var scanStopLoop = null, scanVideoEl = null;
 
 function formatsFor(mode){
   var F = ZXing.BarcodeFormat;
   if(mode === 'qr') return [F.QR_CODE];
-  return [F.CODE_128, F.QR_CODE];
+  return [F.CODE_128, F.QR_CODE, F.CODE_39, F.EAN_13, F.ITF];
 }
 
 function setScanMsg(text, cls){
@@ -1137,70 +1138,152 @@ function setScanMsg(text, cls){
 }
 APP.setScanMsg = setScanMsg;
 
+/* Decode one canvas. ZXing's 1D reader is sensitive to how much of the frame
+   the code occupies, so if the whole frame misses we retry on a centre band
+   and on a few horizontal windows before giving up on this frame. */
+function decodeCanvas(canvas, reader, hints, oneD){
+  var src = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+  var W = canvas.width, H = canvas.height;
+
+  function attempt(source){
+    try {
+      var bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source));
+      return reader.decode(bmp, hints);
+    } catch(e){
+      return null;
+    } finally {
+      try { reader.reset(); } catch(e){}
+    }
+  }
+
+  var r = attempt(src);
+  if(r) return r;
+  if(!oneD) return null;
+
+  /* Centre band — drops clutter above and below the label. */
+  try {
+    r = attempt(src.crop(0, Math.round(H * 0.25), W, Math.max(16, Math.round(H * 0.5))));
+    if(r) return r;
+  } catch(e){}
+
+  /* Horizontal windows, for a code sitting in part of the frame. */
+  var fracs = [0.6, 0.4];
+  for(var i = 0; i < fracs.length; i++){
+    var ww = Math.round(W * fracs[i]);
+    var step = Math.round(ww / 2);
+    for(var x = 0; x + ww <= W; x += step){
+      try {
+        r = attempt(src.crop(x, 0, ww, H));
+        if(r) return r;
+      } catch(e){}
+    }
+  }
+  return null;
+}
+
+/* Our own capture loop. The library's continuous scanner caches a capture
+   canvas that can be sized before the stream reports its dimensions, and
+   then silently never decodes; driving the frames ourselves avoids that. */
+function startDecodeLoop(video, hints, oneD, onResult, onTick){
+  var canvas = document.createElement('canvas');
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var reader = new ZXing.MultiFormatReader();
+  reader.setHints(hints);
+  var stopped = false, frames = 0;
+
+  function tick(){
+    if(stopped) return;
+    if(video.readyState >= 2 && video.videoWidth > 0){
+      if(canvas.width !== video.videoWidth){
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frames++;
+      var res = null;
+      try { res = decodeCanvas(canvas, reader, hints, oneD); } catch(e){ console.warn(e); }
+      if(res){
+        /* onResult returns true to keep scanning (batch imports). */
+        if(!onResult(res)) return;
+      } else if(onTick){
+        onTick(frames, canvas.width, canvas.height);
+      }
+    }
+    setTimeout(tick, 100);
+  }
+  setTimeout(tick, 120);
+  return function(){ stopped = true; };
+}
+
 /* openScanner({title, mode:'qr'|'any', onHit(text) -> true to close}) */
 function openScanner(opts){
   $('scanTitle').textContent = opts.title || 'Scan';
   $('scanOverlay').classList.add('show');
-  setScanMsg('Starting camera…');
+  setScanMsg('Starting camera\u2026');
   $('scanZoomRow').classList.add('hidden');
   scanOnHit = opts.onHit;
   scanActive = true;
 
+  var oneD = opts.mode !== 'qr';
   var hints = new Map();
   hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formatsFor(opts.mode));
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  scanReader = new ZXing.BrowserMultiFormatReader(hints, 200);
 
-  /* Resolution matters more than anything else for Code 128: the default
-     640x480 stream renders the bars too thin to resolve. Ask for the
-     highest sensible frame and let the browser fall back if it can't. */
-  var constraints = {
+  var video = scanVideoEl = $('scanVideo');
+
+  /* Resolution matters for Code 128: the default 640x480 renders thin bars
+     too coarsely. Ask high, fall back if the camera refuses. */
+  var wanted = {
     audio: false,
     video: {
       facingMode: { ideal: 'environment' },
-      width:  { ideal: 1920, min: 1280 },
-      height: { ideal: 1080, min: 720 },
-      frameRate: { ideal: 30 },
+      width:  { ideal: 1920 },
+      height: { ideal: 1080 },
       advanced: [{ focusMode: 'continuous' }]
     }
   };
 
-  function start(c, isFallback){
-    return scanReader.decodeFromConstraints(c, $('scanVideo'), function(result){
-      if(!scanActive || !result) return;
-      var text = result.getText();
-      flash();
-      var done = false;
-      try { done = scanOnHit ? scanOnHit(text, result) : true; } catch(e){ console.warn(e); }
-      if(done) closeScanner();
-    }).then(function(){
-      var v = $('scanVideo');
-      scanStream = v.srcObject || null;
-      if(!scanActive) return;
-      var res = '';
-      if(scanStream){
-        var tr = scanStream.getVideoTracks()[0];
-        if(tr && tr.getSettings){
-          var s = tr.getSettings();
-          if(s.width && s.height) res = '  ·  ' + s.width + '\u00D7' + s.height;
-        }
-        setupZoom(tr);
-      }
-      setScanMsg((opts.hint || 'Point the camera at the code') + res, 'live');
-    });
+  function attach(stream){
+    scanStream = stream;
+    video.srcObject = stream;
+    video.setAttribute('playsinline', 'true');
+    video.muted = true;
+    return video.play().catch(function(){});
   }
 
-  start(constraints).catch(function(){
-    /* Some cameras reject the min constraints outright — retry loosely. */
-    return start({ audio: false, video: { facingMode: { ideal: 'environment' },
-                                          width: { ideal: 1920 }, height: { ideal: 1080 } } }, true);
-  }).catch(function(e){
-    setScanMsg('Camera unavailable — ' + (e && e.message ? e.message : 'permission denied'), 'err');
-  });
+  navigator.mediaDevices.getUserMedia(wanted)
+    .catch(function(){
+      return navigator.mediaDevices.getUserMedia({
+        audio: false, video: { facingMode: { ideal: 'environment' } } });
+    })
+    .then(attach)
+    .then(function(){
+      if(!scanActive){ closeScanner(); return; }
+      var track = scanStream ? scanStream.getVideoTracks()[0] : null;
+      setupZoom(track);
+      var base = opts.hint || 'Point the camera at the code';
+      setScanMsg(base, 'live');
+      scanStopLoop = startDecodeLoop(video, hints, oneD, function(result){
+        if(!scanActive) return false;
+        flash();
+        var done = false;
+        try { done = scanOnHit ? scanOnHit(result.getText(), result) : true; }
+        catch(e){ console.warn(e); }
+        if(done){ closeScanner(); return false; }
+        return true;
+      }, function(frames, w, h){
+        if(frames === 1 || frames % 12 === 0){
+          setScanMsg(base + '  \u00B7  ' + w + '\u00D7' + h, 'live');
+        }
+      });
+    })
+    .catch(function(e){
+      setScanMsg('Camera unavailable \u2014 ' + (e && e.message ? e.message : 'permission denied'), 'err');
+    });
 }
 APP.openScanner = openScanner;
 
-/* Optical zoom helps a lot when the label is across a pallet. */
+/* Optical zoom helps when the label is across a pallet. */
 function setupZoom(track){
   var row = $('scanZoomRow'), slider = $('scanZoom');
   if(!track || !track.getCapabilities) return;
@@ -1221,14 +1304,12 @@ function setupZoom(track){
 function closeScanner(){
   scanActive = false;
   scanOnHit = null;
-  try { if(scanReader) scanReader.reset(); } catch(e){}
-  scanReader = null;
+  if(scanStopLoop){ try { scanStopLoop(); } catch(e){} scanStopLoop = null; }
   if(scanStream){
     try { scanStream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
     scanStream = null;
   }
-  var v = $('scanVideo');
-  if(v) v.srcObject = null;
+  if(scanVideoEl) scanVideoEl.srcObject = null;
   $('scanOverlay').classList.remove('show');
 }
 APP.closeScanner = closeScanner;
