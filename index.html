@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V8</title>
+<title>Dispatch Manifest V9</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -436,13 +436,27 @@ select:disabled,option:disabled{color:#5B646C;}
 .chip.pallet.active{border-color:var(--amber);background:rgba(242,169,59,.12);}
 #palletTally{font-family:var(--mono);font-size:10px;color:var(--text-mid);letter-spacing:.06em;}
 
+/* ---------- Full trip load photo ---------- */
+.photo-box{
+  border:1px solid var(--border);border-radius:8px;overflow:hidden;
+  background:var(--surface-raised);min-height:140px;display:flex;
+  align-items:center;justify-content:center;cursor:pointer;
+}
+.photo-box img{width:100%;height:auto;display:block;max-height:280px;object-fit:contain;}
+.photo-box.blank{
+  border-style:dashed;color:var(--text-low);font-family:var(--mono);font-size:11.5px;
+}
+.photo-actions{display:flex;gap:8px;margin-top:8px;}
+.photo-actions .btn{flex:1;}
+#photoOverlay video{width:100%;height:100%;object-fit:contain;background:#000;display:block;}
+
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V8</h1>
+  <h1>Dispatch Manifest V9</h1>
 </div>
 
 <div class="screens">
@@ -502,21 +516,10 @@ select:disabled,option:disabled{color:#5B646C;}
         <select id="palletCount"></select>
       </div>
       <div class="field">
-        <label for="bayNo">Bay No.</label>
+        <label for="bayNo">Bay No. (Gate)</label>
         <input id="bayNo" type="text" list="bayList" autocomplete="off"
                inputmode="numeric" placeholder="Select or type">
         <datalist id="bayList"></datalist>
-      </div>
-      <div class="field">
-        <label for="otlSeal">OTL (Seal No.)</label>
-        <input id="otlSeal" type="text" autocomplete="off" maxlength="12"
-               placeholder="Up to 12 characters">
-        <div class="seq-note" id="otlNote">Letters and numbers, upper case, 12 max.</div>
-      </div>
-      <div class="field full">
-        <label for="branchSelect">To Branch</label>
-        <select id="branchSelect"><option value="">— Select branch —</option></select>
-        <div id="branchDetails"></div>
       </div>
     </div>
 
@@ -541,6 +544,17 @@ select:disabled,option:disabled{color:#5B646C;}
 
       <div class="subhead">Pallets captured for this trip <span id="palletTally"></span></div>
       <div class="chip-list" id="palletChips" style="max-height:none;"></div>
+    </div>
+
+    <div class="section-label">Full Trip Load</div>
+    <div class="field full" style="margin-bottom:12px;">
+      <label>Truck load photo</label>
+      <div class="photo-box blank" id="loadPhotoBox">Tap to open the camera</div>
+      <div class="photo-actions">
+        <button class="btn small" id="loadPhotoBtn">Take photo</button>
+        <button class="btn small ghost" id="loadPhotoClear">Remove</button>
+      </div>
+      <div class="seq-note" id="loadPhotoNote">Taken after loading is finished.</div>
     </div>
 
     <div class="section-label">Handover</div>
@@ -738,7 +752,7 @@ select:disabled,option:disabled{color:#5B646C;}
       <div class="field full">
         <label for="otlDefault">Default OTL (Seal No.)</label>
         <div class="scanfield">
-          <input id="otlDefault" type="text" maxlength="12" autocomplete="off"
+          <input id="otlDefault" type="text" autocomplete="off"
                  placeholder="Leave empty for none">
           <button class="iconbtn wide" id="otlDefaultSave">Save</button>
         </div>
@@ -836,6 +850,22 @@ select:disabled,option:disabled{color:#5B646C;}
   </div>
 </div>
 
+<!-- Photo overlay -->
+<div class="scan-overlay" id="photoOverlay">
+  <div class="sc-bar">
+    <span class="t">Full trip load</span>
+    <button class="btn small ghost" id="photoCancelBtn">Cancel</button>
+  </div>
+  <div class="sc-stage"><video id="photoVideo" playsinline muted></video></div>
+  <div class="sc-foot">
+    <div class="sc-msg" id="photoMsg">Starting camera…</div>
+    <div class="btn-row">
+      <button class="btn" id="photoFlipBtn">Flip</button>
+      <button class="btn primary" id="photoShutter">Capture</button>
+    </div>
+  </div>
+</div>
+
 <!-- Signature overlay -->
 <div class="sig-overlay" id="sigOverlay">
   <div class="sig-bar">
@@ -890,7 +920,7 @@ var APP = window.APP = {};
 /* ---------------- constants ---------------- */
 var DM_GROUPS = 9;              // Delivery Manifest 1..9
 var MERGED_PER_GROUP = 11;      // Merged Pallet Manifest 1..11
-var MERGED_ALWAYS_VISIBLE = 2;  // MPM 1 and 2 always shown
+var MERGED_ALWAYS_VISIBLE = 1;  // only MPM 1 stays on screen; MPM 2+ collapse
 var SEQ_MIN = 1;                // Physical Pallet Sequence starts at 1
 var SEQ_MAX = 40;               // Physical Pallet Sequence 1..40
 var TRIP_TODAY_MAX = 9;         // Vehicle Trip of Today 0..9
@@ -1524,6 +1554,101 @@ function toggleTorch(){
 document.addEventListener('DOMContentLoaded', function(){
   $('scanCloseBtn').addEventListener('click', closeScanner);
   $('scanTorchBtn').addEventListener('click', toggleTorch);
+});
+
+/* ============================================================
+   Load photo — camera still, downscaled before storage
+
+   1600 px on the long edge at JPEG q0.75 keeps the whole trailer face
+   legible (pallet rows, strapping, door seal) while landing around
+   200-350 KB, which IndexedDB and the JSON backup can carry per trip.
+   Full 1920x1080 PNG would be 2-4 MB for no useful extra detail.
+   ============================================================ */
+var PHOTO_MAX_EDGE = 1600;
+var PHOTO_QUALITY = 0.75;
+
+var photoStream = null, photoFacing = 'environment', photoResolve = null;
+
+function stopPhotoStream(){
+  if(photoStream){
+    try { photoStream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+    photoStream = null;
+  }
+  var v = $('photoVideo');
+  if(v) v.srcObject = null;
+}
+
+function startPhotoStream(){
+  var msg = $('photoMsg');
+  msg.textContent = 'Starting camera\u2026';
+  msg.className = 'sc-msg';
+  stopPhotoStream();
+  return navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      facingMode: { ideal: photoFacing },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 }
+    }
+  }).then(function(stream){
+    photoStream = stream;
+    var v = $('photoVideo');
+    v.srcObject = stream;
+    v.muted = true;
+    v.setAttribute('playsinline', 'true');
+    return v.play().catch(function(){});
+  }).then(function(){
+    var v = $('photoVideo');
+    msg.textContent = 'Frame the loaded truck, then tap Capture'
+      + (v.videoWidth ? '  \u00B7  ' + v.videoWidth + '\u00D7' + v.videoHeight : '');
+    msg.className = 'sc-msg live';
+  }).catch(function(e){
+    msg.textContent = 'Camera unavailable \u2014 ' + (e && e.message ? e.message : 'permission denied');
+    msg.className = 'sc-msg err';
+  });
+}
+
+/* Resolves with {data, w, h, bytes, at} or null if cancelled. */
+function openCamera(){
+  return new Promise(function(resolve){
+    photoResolve = resolve;
+    $('photoOverlay').classList.add('show');
+    startPhotoStream();
+  });
+}
+APP.openCamera = openCamera;
+
+function closeCamera(result){
+  stopPhotoStream();
+  $('photoOverlay').classList.remove('show');
+  var r = photoResolve;
+  photoResolve = null;
+  if(r) r(result || null);
+}
+
+function grabPhoto(){
+  var v = $('photoVideo');
+  if(!v || !v.videoWidth){ toast('Camera is not ready yet', true); return; }
+  var w = v.videoWidth, h = v.videoHeight;
+  var scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(w, h));
+  var cw = Math.max(1, Math.round(w * scale));
+  var ch = Math.max(1, Math.round(h * scale));
+  var c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  c.getContext('2d').drawImage(v, 0, 0, cw, ch);
+  var data = c.toDataURL('image/jpeg', PHOTO_QUALITY);
+  var bytes = Math.round((data.length - (data.indexOf(',') + 1)) * 0.75);
+  captureFeedback();
+  closeCamera({ data: data, w: cw, h: ch, bytes: bytes, at: new Date().toISOString() });
+}
+
+document.addEventListener('DOMContentLoaded', function(){
+  $('photoCancelBtn').addEventListener('click', function(){ closeCamera(null); });
+  $('photoShutter').addEventListener('click', grabPhoto);
+  $('photoFlipBtn').addEventListener('click', function(){
+    photoFacing = (photoFacing === 'environment') ? 'user' : 'environment';
+    startPhotoStream();
+  });
 });
 
 /* ============================================================
@@ -2199,6 +2324,7 @@ var signatureData = null;
 var empSignatureData = null;
 var editingId = null;
 var currentCounter = 1;
+var loadPhoto = null;
 var pallets = [];   /* {sequence, manifests:[...]} for the trip being built */
 
 /* ---------------- scan icon ---------------- */
@@ -2258,13 +2384,81 @@ function makeScanField(id, label){
   return fld;
 }
 
+/* A plain select of stored branches, one per Delivery Manifest. */
+function makeBranchField(id){
+  var fld = el('div', 'field full');
+  fld.appendChild(el('label', null, 'To Branch'));
+  var sel = document.createElement('select');
+  sel.id = id;
+  sel.className = 'branch-select';
+  fld.appendChild(sel);
+  return fld;
+}
+
+/* OTL seal: upper-case letters and digits, 12 max. */
+function makeOtlField(id){
+  var fld = el('div', 'field full');
+  fld.appendChild(el('label', null, 'OTL Seal Number'));
+  var inp = document.createElement('input');
+  inp.id = id;
+  inp.type = 'text';
+  inp.autocomplete = 'off';
+  inp.placeholder = 'Up to 12 characters';
+  inp.addEventListener('input', function(){
+    var clean = APP.alnum(inp.value, 12);
+    if(clean !== inp.value) inp.value = clean;
+    refreshManifestBadges();
+  });
+  fld.appendChild(inp);
+  return fld;
+}
+
+/* Master pallet size: two standard sizes plus anything typed. */
+var PALLET_SIZES = ['Large 120 x 100', 'Small 120 x 80'];
+var PALLET_SIZE_DEFAULT = PALLET_SIZES[0];
+
+function makeSizeField(id){
+  var fld = el('div', 'field full');
+  fld.appendChild(el('label', null, 'Master Pallet Size cm'));
+  var inp = document.createElement('input');
+  inp.id = id;
+  inp.type = 'text';
+  inp.autocomplete = 'off';
+  inp.setAttribute('list', 'palletSizeList');
+  inp.value = PALLET_SIZE_DEFAULT;
+  inp.addEventListener('input', refreshManifestBadges);
+  fld.appendChild(inp);
+  return fld;
+}
+
+function buildSizeList(){
+  if($('palletSizeList')) return;
+  var dl = document.createElement('datalist');
+  dl.id = 'palletSizeList';
+  PALLET_SIZES.forEach(function(v){
+    var o = document.createElement('option');
+    o.value = v;
+    dl.appendChild(o);
+  });
+  document.body.appendChild(dl);
+}
+
 /* ---------------- manifest field ids ---------------- */
+/* Fields that count towards the "filled" badge. */
 function groupFieldIds(g){
+  var ids = ['m' + g + '_truck', 'm' + g + '_master', 'm' + g + '_size',
+             'm' + g + '_branch', 'm' + g + '_otl'];
+  for(var i = 1; i <= C.MERGED_PER_GROUP; i++) ids.push('m' + g + '_mp' + i);
+  return ids;
+}
+/* Only the manifest numbers decide whether a pallet has real content —
+   a pre-filled size or a default seal must not make an empty pallet saveable. */
+function groupNumberIds(g){
   var ids = ['m' + g + '_truck', 'm' + g + '_master'];
   for(var i = 1; i <= C.MERGED_PER_GROUP; i++) ids.push('m' + g + '_mp' + i);
   return ids;
 }
-var FIELDS_PER_GROUP = 2 + C.MERGED_PER_GROUP; // 13
+var FIELDS_PER_GROUP = 5 + C.MERGED_PER_GROUP; // 16
 
 /* ---------------- build the five manifest panels ---------------- */
 function buildManifests(){
@@ -2297,6 +2491,9 @@ function buildManifests(){
 
     lead.appendChild(makeScanField('m' + g + '_truck', 'Truck Manifest ' + g));
     lead.appendChild(makeScanField('m' + g + '_master', 'Master Pallet Manifest'));
+    lead.appendChild(makeSizeField('m' + g + '_size'));
+    lead.appendChild(makeBranchField('m' + g + '_branch'));
+    lead.appendChild(makeOtlField('m' + g + '_otl'));
     for(var v = 1; v <= C.MERGED_ALWAYS_VISIBLE; v++){
       lead.appendChild(makeScanField('m' + g + '_mp' + v, 'Merged Pallet Manifest ' + v));
     }
@@ -2421,9 +2618,6 @@ function loadTrip(rec){
   setSelectValue($('palletCount'), rec.palletCount);
 
   $('bayNo').value = rec.bayNo || '';
-  $('otlSeal').value = rec.otlSeal || '';
-  setSelectValue($('branchSelect'), rec.branchCode || '');
-  onBranchChange();
 
   /* Records written before pallets existed carry a single manifest set. */
   pallets = (rec.pallets && rec.pallets.length)
@@ -2448,7 +2642,9 @@ function loadTrip(rec){
 
   signatureData = rec.driverSignature || null;
   empSignatureData = rec.dcSignature || null;
+  loadPhoto = rec.loadPhoto || null;
   renderSignaturePreview();
+  renderLoadPhoto();
 
   $('dispatchAt').value = rec.dispatchAt || '';
   setEditingChrome();
@@ -2459,13 +2655,12 @@ function startNewTrip(counter){
   currentCounter = counter;
   pallets = [];
   $('bayNo').value = '';
-  $('otlSeal').value = Lists.getSetting('otlDefault') || '';
-  $('branchSelect').value = '';
-  onBranchChange();
+  loadPhoto = null;
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
   renderSignaturePreview();
+  renderLoadPhoto();
   $('dispatchAt').value = '';
   refreshSequence();
   renderPalletChips();
@@ -2547,32 +2742,25 @@ function buildBayList(){
   }
 }
 
-/* ---------------- to branch ---------------- */
+/* ---------------- to branch (one select per manifest) ---------------- */
 function refreshBranchSelect(){
-  var sel = $('branchSelect');
-  var prev = sel.value;
-  sel.innerHTML = '';
-  var blank = document.createElement('option');
-  blank.value = ''; blank.textContent = '— Select branch —';
-  sel.appendChild(blank);
-  Lists.sorted('branches').forEach(function(r){
-    var o = document.createElement('option');
-    o.value = Lists.keyOf('branches', r);
-    o.textContent = (r.code ? r.code + ' · ' : '') + (r.name || '');
-    sel.appendChild(o);
-  });
-  if(prev) sel.value = prev;
-  onBranchChange();
-}
-
-function selectedBranch(){
-  var v = $('branchSelect').value;
-  return Lists.get('branches').filter(function(r){
-    return Lists.keyOf('branches', r) === v; })[0] || null;
-}
-
-function onBranchChange(){
-  Lists.renderDetails('branches', $('branchDetails'), $('branchSelect').value);
+  var branches = Lists.sorted('branches');
+  for(var g = 1; g <= C.DM_GROUPS; g++){
+    var sel = $('m' + g + '_branch');
+    if(!sel) continue;
+    var prev = sel.value;
+    sel.innerHTML = '';
+    var blank = document.createElement('option');
+    blank.value = ''; blank.textContent = '— Select branch —';
+    sel.appendChild(blank);
+    branches.forEach(function(r){
+      var o = document.createElement('option');
+      o.value = Lists.keyOf('branches', r);
+      o.textContent = (r.code ? r.code + ' · ' : '') + (r.name || '');
+      sel.appendChild(o);
+    });
+    if(prev) setSelectValue(sel, prev);
+  }
 }
 
 /* ---------------- vehicle ---------------- */
@@ -2702,9 +2890,16 @@ function readManifestFields(){
     for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
       merged.push($('m' + g + '_mp' + i).value.trim());
     }
+    var bsel = $('m' + g + '_branch');
+    var brec = Lists.get('branches').filter(function(r){
+      return Lists.keyOf('branches', r) === bsel.value; })[0] || null;
     out.push({
       truck: $('m' + g + '_truck').value.trim(),
       master: $('m' + g + '_master').value.trim(),
+      size: $('m' + g + '_size').value.trim(),
+      branchCode: bsel.value,
+      branch: brec ? Object.assign({}, brec) : null,
+      otl: APP.alnum($('m' + g + '_otl').value, 12),
       merged: merged
     });
   }
@@ -2712,10 +2907,18 @@ function readManifestFields(){
 }
 
 function writeManifestFields(manifests){
+  var blank = !manifests;
   for(var g = 1; g <= C.DM_GROUPS; g++){
     var m = (manifests || [])[g - 1] || { merged: [] };
     $('m' + g + '_truck').value = m.truck || '';
     $('m' + g + '_master').value = m.master || '';
+    $('m' + g + '_size').value = blank
+      ? PALLET_SIZE_DEFAULT : (m.size || PALLET_SIZE_DEFAULT);
+    setSelectValue($('m' + g + '_branch'), m.branchCode || '');
+    /* The stored default seal applies to the first manifest of a fresh pallet. */
+    $('m' + g + '_otl').value = blank
+      ? (g === 1 ? (Lists.getSetting('otlDefault') || '') : '')
+      : (m.otl || '');
     for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
       $('m' + g + '_mp' + i).value = (m.merged || [])[i - 1] || '';
     }
@@ -2728,12 +2931,26 @@ function countFilled(manifests){
   (manifests || []).forEach(function(m){
     if(m.truck) n++;
     if(m.master) n++;
+    if(m.size) n++;
+    if(m.branchCode) n++;
+    if(m.otl) n++;
     (m.merged || []).forEach(function(v){ if(v) n++; });
   });
   return n;
 }
 
-function fieldsHaveData(){ return countFilled(readManifestFields()) > 0; }
+/* Manifest numbers only — see groupNumberIds. */
+function countNumbers(manifests){
+  var n = 0;
+  (manifests || []).forEach(function(m){
+    if(m.truck) n++;
+    if(m.master) n++;
+    (m.merged || []).forEach(function(v){ if(v) n++; });
+  });
+  return n;
+}
+
+function fieldsHaveData(){ return countNumbers(readManifestFields()) > 0; }
 
 function getPallet(seq){
   return pallets.filter(function(p){ return Number(p.sequence) === Number(seq); })[0] || null;
@@ -2754,7 +2971,7 @@ function savePallet(){
   if(opt && opt.disabled){ toast('That sequence is already used', true); return; }
 
   var manifests = readManifestFields();
-  if(countFilled(manifests) === 0){
+  if(countNumbers(manifests) === 0){
     toast('Nothing to save — enter at least one manifest number', true);
     return;
   }
@@ -2764,7 +2981,7 @@ function savePallet(){
   else pallets.push({ sequence: seq, manifests: manifests });
   pallets.sort(function(a, b){ return a.sequence - b.sequence; });
 
-  toast('Pallet ' + seq + ' saved · ' + countFilled(manifests) + ' numbers');
+  toast('Pallet ' + seq + ' saved · ' + countNumbers(manifests) + ' numbers');
   APP.flash();
 
   /* Advance to the next sequence that is neither locked nor already captured. */
@@ -2833,7 +3050,7 @@ function renderPalletChips(){
     var chip = el('span', 'chip pallet' + (Number(p.sequence) === current ? ' active' : ''));
     var n = el('span', 'n', 'Pallet ' + p.sequence);
     chip.appendChild(n);
-    chip.appendChild(document.createTextNode(' · ' + countFilled(p.manifests) + ' no.'));
+    chip.appendChild(document.createTextNode(' · ' + countNumbers(p.manifests) + ' no.'));
     chip.addEventListener('click', function(){
       refreshSequence(String(p.sequence));
       $('palletSequence').value = String(p.sequence);
@@ -2857,6 +3074,33 @@ function renderPalletChips(){
   });
 }
 APP.renderPalletChips = renderPalletChips;
+
+/* ---------------- full trip load photo ---------------- */
+function renderLoadPhoto(){
+  var box = $('loadPhotoBox');
+  box.innerHTML = '';
+  if(loadPhoto && loadPhoto.data){
+    box.classList.remove('blank');
+    var img = document.createElement('img');
+    img.src = loadPhoto.data;
+    box.appendChild(img);
+    $('loadPhotoNote').textContent = loadPhoto.w + '\u00D7' + loadPhoto.h
+      + ' JPEG \u00B7 ' + Math.round(loadPhoto.bytes / 1024) + ' KB';
+  } else {
+    box.classList.add('blank');
+    box.textContent = 'Tap to open the camera';
+    $('loadPhotoNote').textContent = 'Taken after loading is finished.';
+  }
+}
+
+function takeLoadPhoto(){
+  APP.openCamera().then(function(shot){
+    if(!shot) return;
+    loadPhoto = shot;
+    renderLoadPhoto();
+    toast('Load photo captured · ' + Math.round(shot.bytes / 1024) + ' KB');
+  });
+}
 
 /* ---------------- signature ---------------- */
 var sigCtx = null, sigDrawing = false, sigDirty = false, sigLast = null;
@@ -2986,7 +3230,6 @@ function collectTrip(){
     return r.empId === $('driverIdSelect').value; })[0] || null;
   var dcRec = Lists.get('dc').filter(function(r){
     return r.empId === $('dcIdSelect').value; })[0] || null;
-  var brnRec = selectedBranch();
 
   return {
     id: editingId || APP.uid(),
@@ -3000,15 +3243,14 @@ function collectTrip(){
     vehicleTripToday: $('vehicleTripToday').value,
     palletCount: $('palletCount').value,
     bayNo: $('bayNo').value.trim(),
-    otlSeal: APP.alnum($('otlSeal').value, 12),
-    branchCode: brnRec ? (brnRec.code || '') : $('branchSelect').value,
-    branch: brnRec ? Object.assign({}, brnRec) : null,
+
     pallets: pallets.map(function(p){
       return { sequence: p.sequence, manifests: p.manifests };
     }),
     driverName: drvRec ? drvRec.name : '',
     driverEmpId: drvRec ? drvRec.empId : '',
     driverSignature: signatureData || '',
+    loadPhoto: loadPhoto || null,
     dcEmpId: dcRec ? dcRec.empId : '',
     dcEmpName: dcRec ? dcRec.name : '',
     dcSignature: empSignatureData || '',
@@ -3070,14 +3312,10 @@ function saveTrip(){
   });
 }
 
+/* Blank the manifests back to a fresh pallet — which means the default
+   pallet size and the stored default seal, not empty strings. */
 function clearManifestFields(){
-  for(var g = 1; g <= C.DM_GROUPS; g++){
-    groupFieldIds(g).forEach(function(id){
-      var inp = $(id);
-      if(inp) inp.value = '';
-    });
-  }
-  refreshManifestBadges();
+  writeManifestFields(null);
 }
 
 /* After a save, keep the crew and vehicle, clear the load-specific data. */
@@ -3085,13 +3323,12 @@ function clearAfterSave(){
   editingId = null;
   pallets = [];
   $('bayNo').value = '';
-  $('otlSeal').value = Lists.getSetting('otlDefault') || '';
-  $('branchSelect').value = '';
-  onBranchChange();
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
+  loadPhoto = null;
   renderSignaturePreview();
+  renderLoadPhoto();
   $('dispatchAt').value = '';
   refreshTripCounter();
   refreshSequence();
@@ -3108,8 +3345,6 @@ function resetAll(){
 
   $('dateStamp').value = APP.todayISO();
   $('bayNo').value = '';
-  $('otlSeal').value = Lists.getSetting('otlDefault') || '';
-  $('branchSelect').value = '';
   $('vehicleSelect').value = '';
   $('driverNameSelect').value = '';
   $('driverIdSelect').value = '';
@@ -3123,7 +3358,9 @@ function resetAll(){
   clearManifestFields();
   signatureData = null;
   empSignatureData = null;
+  loadPhoto = null;
   renderSignaturePreview();
+  renderLoadPhoto();
 
   /* Collapse the manifest panels back to their default state. */
   for(var g = 1; g <= C.DM_GROUPS; g++){
@@ -3140,7 +3377,6 @@ function resetAll(){
   onVehicleChange();
   onDriverChange();
   onDcChange();
-  onBranchChange();
   /* Forced last: onVehicleChange would otherwise keep the previous number. */
   refreshSequence(String(C.SEQ_MIN));
   $('palletSequence').value = String(C.SEQ_MIN);
@@ -3204,12 +3440,6 @@ Trip.init = function(trips){
   $('dcNameSelect').addEventListener('change', function(){ onDcChange('name'); });
 
   buildBayList();
-  $('otlSeal').addEventListener('input', function(){
-    var inp = $('otlSeal');
-    var clean = APP.alnum(inp.value, 12);
-    if(clean !== inp.value) inp.value = clean;
-  });
-  $('branchSelect').addEventListener('change', onBranchChange);
   $('palletCount').addEventListener('change', renderPalletChips);
 
   $('dispatchNowBtn').addEventListener('click', function(){
@@ -3228,11 +3458,22 @@ Trip.init = function(trips){
   $('dcScanBtn').addEventListener('click', function(){ Lists.importByQr('dc'); });
   $('dcQrBtn').addEventListener('click', function(){ Lists.shareAsQr('dc'); });
 
+  $('loadPhotoBox').addEventListener('click', takeLoadPhoto);
+  $('loadPhotoBtn').addEventListener('click', takeLoadPhoto);
+  $('loadPhotoClear').addEventListener('click', function(){
+    if(!loadPhoto){ toast('No photo to remove'); return; }
+    loadPhoto = null;
+    renderLoadPhoto();
+    toast('Load photo removed');
+  });
+  buildSizeList();
+
   $('saveTripBtn').addEventListener('click', saveTrip);
   $('resetTripBtn').addEventListener('click', resetForm);
 
   wireSignature();
   renderSignaturePreview();
+  renderLoadPhoto();
   refreshManifestBadges();
 
   refreshVehicleSelect();
@@ -3329,10 +3570,9 @@ function renderRecords(){
                t.dcEmpName, t.dcEmpId].join(' ').toLowerCase();
     if(hay.indexOf(q) >= 0) return true;
     if((t.bayNo || '').toLowerCase().indexOf(q) >= 0) return true;
-    if((t.otlSeal || '').toLowerCase().indexOf(q) >= 0) return true;
     return tripPallets(t).some(function(p){
       return (p.manifests || []).some(function(m){
-        return [m.truck, m.master].concat(m.merged || []).some(function(v){
+        return [m.truck, m.master, m.otl, m.branchCode].concat(m.merged || []).some(function(v){
           return v && String(v).toLowerCase().indexOf(q) >= 0;
         });
       });
@@ -3392,13 +3632,7 @@ function openRecord(t){
   }
   add('Vehicle trip of today', t.vehicleTripToday);
   add('Physical pallet count', t.palletCount);
-  add('Bay No.', t.bayNo);
-  add('OTL (Seal No.)', t.otlSeal);
-  add('To Branch', t.branch ? (t.branch.code + ' · ' + t.branch.name) : t.branchCode);
-  if(t.branch){
-    add('Branch location', t.branch.coords);
-    add('Branch link', t.branch.link);
-  }
+  add('Bay No. (Gate)', t.bayNo);
   add('Pallets captured', tripPallets(t).length);
   add('Driver', t.driverName ? t.driverName + ' · ' + t.driverEmpId : '');
   add('DC employee', t.dcEmpName ? t.dcEmpName + ' · ' + t.dcEmpId : '');
@@ -3415,6 +3649,10 @@ function openRecord(t){
       (m.merged || []).forEach(function(v, j){
         if(v) vals.push(['Merged Pallet Manifest ' + (j + 1), v]);
       });
+      if(m.size) vals.push(['Master Pallet Size cm', m.size]);
+      if(m.branchCode) vals.push(['To Branch',
+        (m.branch && m.branch.name) ? m.branchCode + ' · ' + m.branch.name : m.branchCode]);
+      if(m.otl) vals.push(['OTL Seal Number', m.otl]);
       if(!vals.length) return;
       if(!any){
         wrap.appendChild(el('div', 'subhead',
@@ -3439,6 +3677,14 @@ function openRecord(t){
     img.src = data;
     box.appendChild(img);
     wrap.appendChild(box);
+  }
+  if(t.loadPhoto && t.loadPhoto.data){
+    wrap.appendChild(el('div', 'subhead', 'Full trip load'));
+    var pb = el('div', 'photo-box');
+    var pim = document.createElement('img');
+    pim.src = t.loadPhoto.data;
+    pb.appendChild(pim);
+    wrap.appendChild(pb);
   }
   sigBlock('Driver signature', t.driverSignature);
   sigBlock('DC employee signature', t.dcSignature);
@@ -3521,17 +3767,19 @@ function exportColumns(){
               'Vehicle Type', 'Chassis Number', 'Maker', 'Model',
               'Considered Pallets Count', 'Considered Tonnage',
               'Vehicle Trip of Today', 'Physical Pallet Count',
-              'Bay No.', 'OTL (Seal No.)', 'To Branch Code', 'To Branch Name',
-              'Branch Location Coordination', 'Branch Location Link',
-              'Physical Pallet Sequence'];
+              'Bay No. (Gate)', 'Physical Pallet Sequence'];
   for(var g = 1; g <= C.DM_GROUPS; g++){
     cols.push('DM' + g + ' Truck Manifest ' + g);
     cols.push('DM' + g + ' Master Pallet Manifest');
+    cols.push('DM' + g + ' Master Pallet Size cm');
+    cols.push('DM' + g + ' To Branch Code');
+    cols.push('DM' + g + ' To Branch Name');
+    cols.push('DM' + g + ' OTL Seal Number');
     for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
       cols.push('DM' + g + ' Merged Pallet Manifest ' + i);
     }
   }
-  cols.push('Driver Name', 'Driver Employee ID', 'Driver Signature',
+  cols.push('Load Photo', 'Driver Name', 'Driver Employee ID', 'Driver Signature',
             'DC Employee ID', 'DC Employee Name', 'DC Employee Signature',
             'Dispatch Date & Time', 'Dispatch Time Source', 'Saved At');
   return cols;
@@ -3552,21 +3800,21 @@ function tripRow(t, pallet){
              v.vehicleType || '', v.chassis || '', v.maker || '', v.model || '',
              v.palletsCount || '', v.tonnage || '',
              t.vehicleTripToday, t.palletCount,
-             t.bayNo || '', t.otlSeal || '',
-             (t.branch && t.branch.code) || t.branchCode || '',
-             (t.branch && t.branch.name) || '',
-             (t.branch && t.branch.coords) || '',
-             (t.branch && t.branch.link) || '',
-             pallet.sequence];
+             t.bayNo || '', pallet.sequence];
   for(var g = 0; g < C.DM_GROUPS; g++){
     var m = (pallet.manifests || [])[g] || { merged: [] };
     row.push(m.truck || '');
     row.push(m.master || '');
+    row.push(m.size || '');
+    row.push((m.branch && m.branch.code) || m.branchCode || '');
+    row.push((m.branch && m.branch.name) || '');
+    row.push(m.otl || '');
     for(var i = 0; i < C.MERGED_PER_GROUP; i++){
       row.push((m.merged || [])[i] || '');
     }
   }
-  row.push(t.driverName || '', t.driverEmpId || '',
+  row.push(t.loadPhoto ? (t.loadPhoto.w + 'x' + t.loadPhoto.h + ' JPEG') : 'None',
+           t.driverName || '', t.driverEmpId || '',
            t.driverSignature ? 'Signed' : 'Not signed',
            t.dcEmpId || '', t.dcEmpName || '',
            t.dcSignature ? 'Signed' : 'Not signed',
@@ -3631,9 +3879,14 @@ function importTripsTable(){
             for(var i = 1; i <= C.MERGED_PER_GROUP; i++){
               merged.push(cell(r, 'DM' + g + ' Merged Pallet Manifest ' + i));
             }
+            var bc = cell(r, 'DM' + g + ' To Branch Code');
             manifests.push({
               truck: cell(r, 'DM' + g + ' Truck Manifest ' + g),
               master: cell(r, 'DM' + g + ' Master Pallet Manifest'),
+              size: cell(r, 'DM' + g + ' Master Pallet Size cm'),
+              branchCode: bc,
+              branch: bc ? { code: bc, name: cell(r, 'DM' + g + ' To Branch Name') } : null,
+              otl: cell(r, 'DM' + g + ' OTL Seal Number'),
               merged: merged
             });
           }
@@ -3658,14 +3911,8 @@ function importTripsTable(){
           },
           vehicleTripToday: cell(head, 'Vehicle Trip of Today'),
           palletCount: cell(head, 'Physical Pallet Count'),
-          bayNo: cell(head, 'Bay No.'),
-          otlSeal: cell(head, 'OTL (Seal No.)'),
-          branchCode: cell(head, 'To Branch Code'),
-          branch: cell(head, 'To Branch Code') ? {
-            code: cell(head, 'To Branch Code'), name: cell(head, 'To Branch Name'),
-            coords: cell(head, 'Branch Location Coordination'),
-            link: cell(head, 'Branch Location Link')
-          } : null,
+          bayNo: cell(head, 'Bay No. (Gate)') || cell(head, 'Bay No.'),
+          loadPhoto: null,
           pallets: pallets,
           driverName: cell(head, 'Driver Name'),
           driverEmpId: cell(head, 'Driver Employee ID'),
