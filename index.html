@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#12161A">
-<title>Dispatch Manifest V9</title>
+<title>Dispatch Manifest V10</title>
 <link rel="manifest" href="./manifest.json">
 <link rel="icon" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
@@ -456,7 +456,7 @@ select:disabled,option:disabled{color:#5B646C;}
 
 <div class="topbar">
   <div class="eyebrow"><span class="dot"></span> OFFLINE · LOCAL DEVICE STORAGE</div>
-  <h1>Dispatch Manifest V9</h1>
+  <h1>Dispatch Manifest V10</h1>
 </div>
 
 <div class="screens">
@@ -2413,34 +2413,78 @@ function makeOtlField(id){
   return fld;
 }
 
-/* Master pallet size: two standard sizes plus anything typed. */
+/* Master pallet size: a real dropdown of the two standard sizes, plus a
+   Manual entry option that reveals a text box for anything else. */
 var PALLET_SIZES = ['Large 120 x 100', 'Small 120 x 80'];
 var PALLET_SIZE_DEFAULT = PALLET_SIZES[0];
+var PALLET_SIZE_MANUAL = '__manual__';
 
 function makeSizeField(id){
   var fld = el('div', 'field full');
   fld.appendChild(el('label', null, 'Master Pallet Size cm'));
-  var inp = document.createElement('input');
-  inp.id = id;
-  inp.type = 'text';
-  inp.autocomplete = 'off';
-  inp.setAttribute('list', 'palletSizeList');
-  inp.value = PALLET_SIZE_DEFAULT;
-  inp.addEventListener('input', refreshManifestBadges);
-  fld.appendChild(inp);
-  return fld;
-}
 
-function buildSizeList(){
-  if($('palletSizeList')) return;
-  var dl = document.createElement('datalist');
-  dl.id = 'palletSizeList';
+  var sel = document.createElement('select');
+  sel.id = id;
   PALLET_SIZES.forEach(function(v){
     var o = document.createElement('option');
     o.value = v;
-    dl.appendChild(o);
+    o.textContent = v;
+    sel.appendChild(o);
   });
-  document.body.appendChild(dl);
+  var mo = document.createElement('option');
+  mo.value = PALLET_SIZE_MANUAL;
+  mo.textContent = 'Manual entry\u2026';
+  sel.appendChild(mo);
+  sel.value = PALLET_SIZE_DEFAULT;
+  fld.appendChild(sel);
+
+  var custom = document.createElement('input');
+  custom.id = id + 'Custom';
+  custom.type = 'text';
+  custom.autocomplete = 'off';
+  custom.placeholder = 'Enter size in cm';
+  custom.style.display = 'none';
+  custom.style.marginTop = '6px';
+  custom.addEventListener('input', refreshManifestBadges);
+  fld.appendChild(custom);
+
+  sel.addEventListener('change', function(){
+    syncSizeField(id);
+    if(sel.value === PALLET_SIZE_MANUAL) custom.focus();
+    refreshManifestBadges();
+  });
+  return fld;
+}
+
+/* Show the text box only while Manual entry is selected. */
+function syncSizeField(id){
+  var sel = $(id), custom = $(id + 'Custom');
+  if(!sel || !custom) return;
+  var manual = sel.value === PALLET_SIZE_MANUAL;
+  custom.style.display = manual ? '' : 'none';
+  if(!manual) custom.value = '';
+}
+
+function readSizeField(id){
+  var sel = $(id);
+  if(!sel) return '';
+  if(sel.value === PALLET_SIZE_MANUAL) return ($(id + 'Custom').value || '').trim();
+  return sel.value;
+}
+
+function writeSizeField(id, value){
+  var sel = $(id), custom = $(id + 'Custom');
+  if(!sel || !custom) return;
+  var v = (value == null || value === '') ? PALLET_SIZE_DEFAULT : String(value);
+  if(PALLET_SIZES.indexOf(v) >= 0){
+    sel.value = v;
+    custom.value = '';
+  } else {
+    /* A size that isn't one of the standards came from manual entry. */
+    sel.value = PALLET_SIZE_MANUAL;
+    custom.value = v;
+  }
+  syncSizeField(id);
 }
 
 /* ---------------- manifest field ids ---------------- */
@@ -2508,14 +2552,13 @@ function buildManifests(){
   }
 }
 
+/* Badges use the same counting rule as the stored record, so what the
+   header shows always matches what a saved pallet contains. */
 function refreshManifestBadges(){
+  var manifests = readManifestFields();
   var grand = 0;
   for(var g = 1; g <= C.DM_GROUPS; g++){
-    var n = 0;
-    groupFieldIds(g).forEach(function(id){
-      var inp = $(id);
-      if(inp && inp.value.trim()) n++;
-    });
+    var n = countFilled([manifests[g - 1]]);
     grand += n;
     var b = $('dmFilled' + g);
     if(b){
@@ -2896,7 +2939,7 @@ function readManifestFields(){
     out.push({
       truck: $('m' + g + '_truck').value.trim(),
       master: $('m' + g + '_master').value.trim(),
-      size: $('m' + g + '_size').value.trim(),
+      size: readSizeField('m' + g + '_size'),
       branchCode: bsel.value,
       branch: brec ? Object.assign({}, brec) : null,
       otl: APP.alnum($('m' + g + '_otl').value, 12),
@@ -2912,8 +2955,7 @@ function writeManifestFields(manifests){
     var m = (manifests || [])[g - 1] || { merged: [] };
     $('m' + g + '_truck').value = m.truck || '';
     $('m' + g + '_master').value = m.master || '';
-    $('m' + g + '_size').value = blank
-      ? PALLET_SIZE_DEFAULT : (m.size || PALLET_SIZE_DEFAULT);
+    writeSizeField('m' + g + '_size', blank ? '' : m.size);
     setSelectValue($('m' + g + '_branch'), m.branchCode || '');
     /* The stored default seal applies to the first manifest of a fresh pallet. */
     $('m' + g + '_otl').value = blank
@@ -2931,7 +2973,9 @@ function countFilled(manifests){
   (manifests || []).forEach(function(m){
     if(m.truck) n++;
     if(m.master) n++;
-    if(m.size) n++;
+    /* The size always holds a value, so it only counts once it's been
+       changed from the default — otherwise every group reads 1/16. */
+    if(m.size && m.size !== PALLET_SIZE_DEFAULT) n++;
     if(m.branchCode) n++;
     if(m.otl) n++;
     (m.merged || []).forEach(function(v){ if(v) n++; });
@@ -3466,7 +3510,6 @@ Trip.init = function(trips){
     renderLoadPhoto();
     toast('Load photo removed');
   });
-  buildSizeList();
 
   $('saveTripBtn').addEventListener('click', saveTrip);
   $('resetTripBtn').addEventListener('click', resetForm);
